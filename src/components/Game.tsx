@@ -678,7 +678,7 @@ export default function Game() {
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-1.5">
-            <span className="text-[13px] font-bold text-white leading-tight">{config.name}</span>
+            <span className="text-[15px] font-bold text-white leading-tight">{config.name}</span>
             <span className="text-[9px] text-gray-600 font-mono">{config.hotkey.toUpperCase()}</span>
           </div>
           <div className="text-[10px] text-gray-400 leading-snug mt-0.5">{config.description}</div>
