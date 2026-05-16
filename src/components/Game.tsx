@@ -600,35 +600,35 @@ export default function Game() {
               : 'border-transparent bg-[#0f3460] hover:border-[#e94560] cursor-pointer'
         }`}
       >
-        <div className="w-8 h-8 rounded flex-shrink-0 relative">
+        <div className="w-10 h-10 rounded flex-shrink-0 relative">
           <canvas
             ref={(el) => {
               if (!el) return;
               const c = el.getContext('2d');
               if (!c) return;
-              el.width = 32;
-              el.height = 32;
-              c.clearRect(0, 0, 32, 32);
-              const scale = 32 / CELL_SIZE;
+              el.width = 40;
+              el.height = 40;
+              c.clearRect(0, 0, 40, 40);
+              const scale = 40 / CELL_SIZE;
               c.save();
               c.scale(scale, scale);
               drawBlockShape(c, type, 0, 0, 0);
               c.restore();
             }}
-            width={32}
-            height={32}
+            width={40}
+            height={40}
           />
           {isPowered && (
             <span className="absolute -top-1 -right-1 text-[8px] leading-none">⚡</span>
           )}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-[11px] font-semibold text-white leading-tight">
+          <div className="text-xs font-semibold text-white leading-tight">
             {config.name}
-            <span className="ml-1 text-[8px] text-gray-500 font-normal">[{config.hotkey}]</span>
+            <span className="ml-1 text-[9px] text-gray-500 font-normal">[{config.hotkey}]</span>
           </div>
-          <div className="text-[9px] text-gray-400 leading-tight">{config.description}</div>
-          <div className="text-[9px] text-yellow-400 leading-tight">
+          <div className="text-[10px] text-gray-400 leading-tight">{config.description}</div>
+          <div className="text-[10px] text-yellow-400 leading-tight">
             {type === 'ball' ? (ballPlaced ? '1 / 1' : '0 / 1') : `${count} placed`}
           </div>
         </div>
@@ -642,19 +642,19 @@ export default function Game() {
   return (
     <div className="flex h-screen w-screen overflow-hidden">
       {/* Sidebar */}
-      <div className="w-[200px] flex-shrink-0 bg-[#16213e] border-r-2 border-[#0f3460] flex flex-col p-3 gap-1.5 overflow-y-auto">
-        <h2 className="text-sm font-bold text-[#e94560] uppercase tracking-widest mb-1">Ball Launch</h2>
-        <div className="bg-[#0f3460] rounded-lg py-1.5 px-3 text-center mb-1">
-          <span className="text-base font-bold text-yellow-400">🪙 {coins} Gold</span>
+      <div className="w-[260px] flex-shrink-0 bg-[#16213e] border-r-2 border-[#0f3460] flex flex-col p-4 gap-2 overflow-y-auto">
+        <h2 className="text-base font-bold text-[#e94560] uppercase tracking-widest mb-1">Fling Thing</h2>
+        <div className="bg-[#0f3460] rounded-lg py-2 px-4 text-center mb-1">
+          <span className="text-lg font-bold text-yellow-400">🪙 {coins} Gold</span>
         </div>
 
-        <div className="text-[9px] text-gray-500 uppercase tracking-wider font-semibold mt-1">Blocks</div>
+        <div className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold mt-1">Blocks</div>
         {passiveBlocks.map(renderBlockItem)}
 
-        <div className="text-[9px] text-gray-500 uppercase tracking-wider font-semibold mt-1">Powered ⚡</div>
+        <div className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold mt-1">Powered ⚡</div>
         {poweredBlocks.map(renderBlockItem)}
 
-        <div className="mt-auto pt-2 text-[9px] text-gray-600 leading-relaxed space-y-0.5 border-t border-gray-700/50">
+        <div className="mt-auto pt-2 text-[10px] text-gray-600 leading-relaxed space-y-0.5 border-t border-gray-700/50">
           <div>Left-click: Place block</div>
           <div>Right-click: Rotate preview / block</div>
           <div>Scroll on powered: Change group</div>
