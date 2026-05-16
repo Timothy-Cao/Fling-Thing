@@ -497,23 +497,44 @@ export function drawDistanceMarkers(
   camX = 0,
   camY = 0,
 ) {
-  for (let i = 0; i < 200; i++) {
-    const mx = ox + BUILD_WIDTH + i * CELL_SIZE * 5 - camX;
+  const startX = ox + BUILD_WIDTH - camX;
+  const topY = oy - camY;
+  const botY = oy + BUILD_HEIGHT - camY;
+
+  // Start line — bold gold "0m" marker
+  if (startX > -50 && startX < w + 50) {
+    ctx.beginPath();
+    ctx.moveTo(startX, topY - 10);
+    ctx.lineTo(startX, botY + 10);
+    ctx.strokeStyle = 'rgba(255, 215, 0, 0.5)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(255, 215, 0, 0.7)';
+    ctx.font = 'bold 13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('0m', startX, topY - 16);
+  }
+
+  for (let i = 1; i < 200; i++) {
+    const mx = startX + i * CELL_SIZE * 5;
     if (mx < -50) continue;
     if (mx > w + 50) break;
 
     const isMajor = i % 2 === 0;
     ctx.beginPath();
-    ctx.moveTo(mx, oy - camY);
-    ctx.lineTo(mx, oy + BUILD_HEIGHT + 10 - camY);
+    ctx.moveTo(mx, topY);
+    ctx.lineTo(mx, botY + 10);
     ctx.strokeStyle = isMajor ? 'rgba(255, 215, 0, 0.25)' : COLORS.distanceMarker;
     ctx.lineWidth = isMajor ? 1.5 : 1;
     ctx.stroke();
 
+    const label = `${i * 5}m`;
     ctx.fillStyle = isMajor ? 'rgba(255, 215, 0, 0.5)' : COLORS.distanceText;
-    ctx.font = isMajor ? 'bold 11px sans-serif' : '10px sans-serif';
+    ctx.font = isMajor ? 'bold 12px sans-serif' : '10px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`${i * 5}`, mx, oy + BUILD_HEIGHT + 24 - camY);
+    ctx.fillText(label, mx, topY - 6);
+    ctx.fillText(label, mx, botY + 24);
   }
 }
 
