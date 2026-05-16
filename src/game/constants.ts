@@ -5,7 +5,7 @@ export const CELL_SIZE = 40;
 export const BUILD_WIDTH = GRID_COLS * CELL_SIZE;
 export const BUILD_HEIGHT = GRID_ROWS * CELL_SIZE;
 
-export const STARTING_COINS = 100;
+export const STARTING_COINS = 250;
 
 export const BLOCK_TYPES = [
   'ball', 'solid', 'ramp', 'curve', 'ice', 'bouncy',

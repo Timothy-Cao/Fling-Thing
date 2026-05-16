@@ -54,7 +54,10 @@ export default function Game() {
   const stillFramesRef = useRef(0);
   const maxDistanceRef = useRef(0);
   const gridOffsetRef = useRef({ x: 0, y: 0 });
+  const runGridOffsetRef = useRef({ x: 0, y: 0 });
   const trailRef = useRef<{ x: number; y: number }[]>([]);
+  const editZoomRef = useRef(1);
+  const currentZoomRef = useRef(1);
 
   const blocksRef = useRef<PlacedBlock[]>([]);
   const modeRef = useRef<GameMode>('edit');
@@ -98,9 +101,19 @@ export default function Game() {
     if (!ctx) return;
 
     const calcGridOffset = (w: number, h: number) => {
-      const ox = Math.max(20, (w - BUILD_WIDTH) / 2 - 100);
-      const oy = h - BUILD_HEIGHT - 40 - 10;
-      gridOffsetRef.current = { x: ox, y: Math.max(30, oy) };
+      const padding = 60;
+      const zoomX = (w - padding) / BUILD_WIDTH;
+      const zoomY = (h - padding) / BUILD_HEIGHT;
+      const zoom = Math.min(zoomX, zoomY, 2.0);
+      editZoomRef.current = zoom;
+
+      const ox = (w / zoom - BUILD_WIDTH) / 2;
+      const oy = (h / zoom - BUILD_HEIGHT) / 2;
+      gridOffsetRef.current = { x: Math.max(20, ox), y: Math.max(20, oy) };
+
+      const runOx = (w - BUILD_WIDTH) / 2;
+      const runOy = (h - BUILD_HEIGHT) / 2;
+      runGridOffsetRef.current = { x: Math.max(20, runOx), y: Math.max(20, runOy) };
     };
 
     const resize = () => {
@@ -114,6 +127,8 @@ export default function Game() {
 
     resize();
     window.addEventListener('resize', resize);
+    const ro = new ResizeObserver(resize);
+    if (canvas.parentElement) ro.observe(canvas.parentElement);
 
     let running = true;
     let frameCount = 0;
@@ -125,12 +140,19 @@ export default function Game() {
       const selBlock = selectedBlockRef.current;
       const isBallPlaced = ballPlacedRef.current;
       const curCoins = coinsRef.current;
+      const zoom = currentZoomRef.current;
 
+      // Sky and floor drawn at screen scale
       drawSky(ctx, w, h, frameCount);
-      drawFloor(ctx, w, h, oy, frameCount, 1);
+
+      // Zoomed content
+      ctx.save();
+      ctx.scale(zoom, zoom);
+
+      drawFloor(ctx, w / zoom, h / zoom, oy, frameCount, 1);
       drawGrid(ctx, ox, oy);
       drawBuildAreaBorder(ctx, ox, oy);
-      drawDistanceMarkers(ctx, w, ox, oy);
+      drawDistanceMarkers(ctx, w / zoom, ox, oy);
 
       ctx.fillStyle = 'rgba(255, 215, 0, 0.2)';
       ctx.font = '11px sans-serif';
@@ -153,16 +175,23 @@ export default function Game() {
           ctx.fillRect(hx, hy, CELL_SIZE, CELL_SIZE);
         }
       }
+
+      ctx.restore();
     };
 
     const renderRun = (w: number, h: number) => {
-      const { x: ox, y: oy } = gridOffsetRef.current;
+      const { x: ox, y: oy } = runGridOffsetRef.current;
       const cam = cameraRef.current;
       const currentBlocks = blocksRef.current;
       const activeGroups = activeGroupsRef.current;
+      const zoom = currentZoomRef.current;
 
       drawSky(ctx, w, h, frameCount, cam.x, cam.y);
-      drawFloor(ctx, w, h, oy, frameCount, speedRef.current, cam.y);
+
+      ctx.save();
+      ctx.scale(zoom, zoom);
+
+      drawFloor(ctx, w / zoom, h / zoom, oy, frameCount, speedRef.current, cam.y);
 
       ctx.strokeStyle = 'rgba(233, 69, 96, 0.12)';
       ctx.lineWidth = 2;
@@ -170,7 +199,7 @@ export default function Game() {
       ctx.strokeRect(ox - cam.x, oy - cam.y, BUILD_WIDTH, BUILD_HEIGHT);
       ctx.setLineDash([]);
 
-      drawDistanceMarkers(ctx, w, ox, oy, cam.x, cam.y);
+      drawDistanceMarkers(ctx, w / zoom, ox, oy, cam.x, cam.y);
 
       const sim = simRef.current;
       currentBlocks
@@ -189,9 +218,10 @@ export default function Game() {
         drawBall(ctx, sim.ballBody.position.x, sim.ballBody.position.y, trail, cam);
       }
 
+      ctx.restore();
+
       drawDistanceHUD(ctx, w, maxDistanceRef.current);
 
-      // Group HUD
       const existingGroups = [...new Set(
         currentBlocks
           .filter((b) => GROUPED_TYPES.includes(b.type))
@@ -210,6 +240,12 @@ export default function Game() {
 
         const curMode = modeRef.current;
 
+        const targetZoom = curMode === 'edit' ? editZoomRef.current : 1;
+        currentZoomRef.current += (targetZoom - currentZoomRef.current) * 0.08;
+        if (Math.abs(currentZoomRef.current - targetZoom) < 0.001) {
+          currentZoomRef.current = targetZoom;
+        }
+
         if (curMode === 'edit') {
           renderEdit(w, h);
         } else if (curMode === 'running' || curMode === 'results') {
@@ -225,7 +261,7 @@ export default function Game() {
             trailRef.current.push({ x: ballBody.position.x, y: ballBody.position.y });
             if (trailRef.current.length > 40) trailRef.current.shift();
 
-            const { x: ox, y: oy } = gridOffsetRef.current;
+            const { x: ox, y: oy } = runGridOffsetRef.current;
 
             const captured = applyBlockEffects(
               sim, activeGroupsRef.current, blocksRef.current, ox, oy,
@@ -276,6 +312,7 @@ export default function Game() {
       running = false;
       cancelAnimationFrame(animFrameRef.current);
       window.removeEventListener('resize', resize);
+      ro.disconnect();
     };
   }, []);
 
@@ -283,7 +320,7 @@ export default function Game() {
 
   const handleRun = useCallback(() => {
     if (!ballPlacedRef.current) return;
-    const { x: ox, y: oy } = gridOffsetRef.current;
+    const { x: ox, y: oy } = runGridOffsetRef.current;
     const sim = startSimulation(blocksRef.current, ox, oy);
     if (!sim) return;
     simRef.current = sim;
@@ -344,8 +381,9 @@ export default function Game() {
       const canvas = canvasRef.current;
       if (!canvas) return null;
       const rect = canvas.getBoundingClientRect();
-      const x = clientX - rect.left;
-      const y = clientY - rect.top;
+      const zoom = currentZoomRef.current;
+      const x = (clientX - rect.left) / zoom;
+      const y = (clientY - rect.top) / zoom;
       const { x: ox, y: oy } = gridOffsetRef.current;
       const col = Math.floor((x - ox) / CELL_SIZE);
       const row = Math.floor((y - oy) / CELL_SIZE);
