@@ -16,14 +16,16 @@ import { PlacedBlock, Camera } from './types';
 import type { SimulationState } from './physics';
 
 let starsCache: { x: number; y: number; size: number; brightness: number }[] | null = null;
+let mountainsCache: { peaks: number[]; color: string; parallax: number }[] | null = null;
+let treesCache: { x: number; h: number; w: number; parallax: number; shade: number }[] | null = null;
 
 function getStars(w: number, h: number) {
   if (starsCache && starsCache.length > 0) return starsCache;
   starsCache = [];
-  for (let i = 0; i < 80; i++) {
+  for (let i = 0; i < 100; i++) {
     starsCache.push({
-      x: Math.random() * w,
-      y: Math.random() * h * 0.6,
+      x: Math.random() * w * 2,
+      y: Math.random() * h * 0.5,
       size: Math.random() * 1.5 + 0.5,
       brightness: Math.random() * 0.4 + 0.2,
     });
@@ -31,8 +33,45 @@ function getStars(w: number, h: number) {
   return starsCache;
 }
 
+function getMountains(w: number) {
+  if (mountainsCache) return mountainsCache;
+  mountainsCache = [];
+  const layers = [
+    { color: 'rgba(15, 20, 45, 0.9)', parallax: 0.05, count: 8, minH: 0.15, maxH: 0.3 },
+    { color: 'rgba(20, 30, 60, 0.8)', parallax: 0.1, count: 10, minH: 0.1, maxH: 0.22 },
+    { color: 'rgba(25, 40, 75, 0.6)', parallax: 0.15, count: 12, minH: 0.06, maxH: 0.15 },
+  ];
+  for (const layer of layers) {
+    const peaks: number[] = [];
+    const step = (w * 2) / layer.count;
+    for (let i = 0; i <= layer.count + 2; i++) {
+      peaks.push(layer.minH + Math.random() * (layer.maxH - layer.minH));
+    }
+    mountainsCache.push({ peaks, color: layer.color, parallax: layer.parallax });
+  }
+  return mountainsCache;
+}
+
+function getTrees(w: number) {
+  if (treesCache) return treesCache;
+  treesCache = [];
+  for (let i = 0; i < 40; i++) {
+    treesCache.push({
+      x: Math.random() * w * 3,
+      h: 20 + Math.random() * 35,
+      w: 8 + Math.random() * 12,
+      parallax: 0.2 + Math.random() * 0.1,
+      shade: Math.random(),
+    });
+  }
+  treesCache.sort((a, b) => a.parallax - b.parallax);
+  return treesCache;
+}
+
 export function resetStarsCache() {
   starsCache = null;
+  mountainsCache = null;
+  treesCache = null;
 }
 
 export function getRampVertices(rotation: number, h: number): { x: number; y: number }[] {
@@ -450,20 +489,93 @@ export function drawSky(
   camY = 0,
 ) {
   const sky = ctx.createLinearGradient(0, 0, 0, h);
-  sky.addColorStop(0, COLORS.sky1);
-  sky.addColorStop(0.5, COLORS.sky2);
-  sky.addColorStop(1, COLORS.sky3);
+  sky.addColorStop(0, '#0a0a1a');
+  sky.addColorStop(0.4, '#0f1535');
+  sky.addColorStop(0.7, '#162040');
+  sky.addColorStop(1, '#1a2a50');
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, w, h);
 
+  // Moon
+  const moonX = w * 0.82 - camX * 0.02;
+  const moonY = h * 0.12 - camY * 0.02;
+  const moonR = 28;
+  const moonGlow = ctx.createRadialGradient(moonX, moonY, moonR * 0.5, moonX, moonY, moonR * 4);
+  moonGlow.addColorStop(0, 'rgba(200, 220, 255, 0.15)');
+  moonGlow.addColorStop(1, 'rgba(200, 220, 255, 0)');
+  ctx.fillStyle = moonGlow;
+  ctx.fillRect(moonX - moonR * 4, moonY - moonR * 4, moonR * 8, moonR * 8);
+  ctx.fillStyle = 'rgba(220, 230, 255, 0.9)';
+  ctx.beginPath();
+  ctx.arc(moonX, moonY, moonR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(200, 210, 240, 0.6)';
+  ctx.beginPath();
+  ctx.arc(moonX - 5, moonY - 4, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(moonX + 8, moonY + 6, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Stars
   const stars = getStars(w, h);
   stars.forEach((star) => {
     const twinkle = Math.sin(frameCount * 0.02 + star.x * 0.1) * 0.15 + star.brightness;
+    const sx = ((star.x - camX * 0.08) % (w * 2) + w * 2) % (w * 2) - w * 0.5;
     ctx.fillStyle = `rgba(255, 255, 255, ${twinkle})`;
     ctx.beginPath();
-    ctx.arc(star.x - (camX * 0.1) % w, star.y - (camY * 0.05), star.size, 0, Math.PI * 2);
+    ctx.arc(sx, star.y - camY * 0.03, star.size, 0, Math.PI * 2);
     ctx.fill();
   });
+
+  // Mountains
+  const horizon = h * 0.65;
+  const mountains = getMountains(w);
+  for (const layer of mountains) {
+    const offsetX = camX * layer.parallax;
+    const step = (w * 2) / (layer.peaks.length - 2);
+    ctx.fillStyle = layer.color;
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+    for (let i = 0; i < layer.peaks.length; i++) {
+      const px = i * step - (offsetX % (w * 2)) - step;
+      const py = horizon - layer.peaks[i] * h - camY * layer.parallax;
+      if (i === 0) ctx.lineTo(px, py);
+      else {
+        const prevX = (i - 1) * step - (offsetX % (w * 2)) - step;
+        const cpx = (prevX + px) / 2;
+        ctx.quadraticCurveTo(cpx, py - 10, px, py);
+      }
+    }
+    ctx.lineTo(w + 100, h);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Trees
+  const trees = getTrees(w);
+  for (const tree of trees) {
+    const tx = ((tree.x - camX * tree.parallax) % (w * 3) + w * 3) % (w * 3) - w * 0.5;
+    if (tx < -30 || tx > w + 30) continue;
+    const ty = horizon + 5 - camY * tree.parallax;
+    const g = Math.floor(20 + tree.shade * 15);
+    ctx.fillStyle = `rgb(${g - 5}, ${g + 10}, ${g - 5})`;
+    ctx.beginPath();
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(tx - tree.w * 0.5, ty);
+    ctx.lineTo(tx, ty - tree.h);
+    ctx.lineTo(tx + tree.w * 0.5, ty);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(tx, ty + 2);
+    ctx.lineTo(tx - tree.w * 0.35, ty + 2);
+    ctx.lineTo(tx, ty - tree.h * 0.65);
+    ctx.lineTo(tx + tree.w * 0.35, ty + 2);
+    ctx.closePath();
+    ctx.fillStyle = `rgb(${g}, ${g + 18}, ${g})`;
+    ctx.fill();
+  }
 }
 
 export function drawFloor(

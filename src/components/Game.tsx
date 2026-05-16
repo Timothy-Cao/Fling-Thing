@@ -599,43 +599,45 @@ export default function Game() {
           if (prev !== type) setPreRotation(0);
           return prev === type ? null : type;
         })}
-        className={`w-full flex items-center gap-2.5 p-2 rounded-lg border-2 transition-all text-left ${
+        className={`w-full flex items-center gap-3 p-2.5 rounded-xl border-2 transition-all text-left ${
           isSelected
-            ? 'border-[#e94560] bg-[#1a3a6e]'
+            ? 'border-[#e94560] bg-[#1a3a6e] shadow-[0_0_12px_rgba(233,69,96,0.25)]'
             : disabled
-              ? 'border-transparent bg-[#0f3460] opacity-50 cursor-not-allowed'
-              : 'border-transparent bg-[#0f3460] hover:border-[#e94560] cursor-pointer'
+              ? 'border-transparent bg-[#0d2b52] opacity-40 cursor-not-allowed'
+              : 'border-transparent bg-[#0f3460] hover:border-[#e94560]/60 hover:bg-[#132f5e] cursor-pointer'
         }`}
       >
-        <div className="w-10 h-10 rounded flex-shrink-0 relative">
+        <div className="w-11 h-11 rounded-lg flex-shrink-0 relative bg-black/20 flex items-center justify-center">
           <canvas
             ref={(el) => {
               if (!el) return;
               const c = el.getContext('2d');
               if (!c) return;
-              el.width = 40;
-              el.height = 40;
-              c.clearRect(0, 0, 40, 40);
-              const scale = 40 / CELL_SIZE;
+              el.width = 44;
+              el.height = 44;
+              c.clearRect(0, 0, 44, 44);
+              const scale = 44 / CELL_SIZE;
               c.save();
+              c.translate(2, 2);
               c.scale(scale, scale);
               drawBlockShape(c, type, 0, 0, 0);
               c.restore();
             }}
-            width={40}
-            height={40}
+            width={44}
+            height={44}
+            className="rounded"
           />
           {isPowered && (
-            <span className="absolute -top-1 -right-1 text-[8px] leading-none">⚡</span>
+            <span className="absolute -top-1.5 -right-1.5 text-[9px] leading-none bg-[#16213e] rounded-full px-0.5">⚡</span>
           )}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-semibold text-white leading-tight">
-            {config.name}
-            <span className="ml-1 text-[9px] text-gray-500 font-normal">[{config.hotkey}]</span>
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-[13px] font-bold text-white leading-tight">{config.name}</span>
+            <span className="text-[9px] text-gray-600 font-mono">{config.hotkey.toUpperCase()}</span>
           </div>
-          <div className="text-[10px] text-gray-400 leading-tight">{config.description}</div>
-          <div className="text-[10px] text-yellow-400 leading-tight">
+          <div className="text-[10px] text-gray-400 leading-snug mt-0.5">{config.description}</div>
+          <div className="text-[10px] text-yellow-400/80 leading-tight mt-0.5">
             {type === 'ball' ? (ballPlaced ? '1 / 1' : '0 / 1') : `${count} placed`}
           </div>
         </div>
@@ -649,89 +651,105 @@ export default function Game() {
   return (
     <div className="flex h-screen w-screen overflow-hidden">
       {/* Sidebar */}
-      <div className="w-[260px] flex-shrink-0 bg-[#16213e] border-r-2 border-[#0f3460] flex flex-col p-4 gap-2 overflow-y-auto">
-        <div className="text-center mb-1">
-          <h2 className="text-lg font-extrabold text-[#e94560] uppercase tracking-[0.2em] leading-none">Fling Thing</h2>
-          <div className="text-[9px] text-gray-500 tracking-[0.3em] uppercase mt-0.5">a Tim Cao game</div>
-        </div>
-        <div className="bg-[#0f3460] rounded-lg py-2 px-4 text-center mb-1">
-          <span className="text-lg font-bold text-yellow-400">🪙 {coins} Gold</span>
+      <div className="w-[280px] flex-shrink-0 bg-gradient-to-b from-[#16213e] to-[#111d35] border-r border-[#1a3a6e]/50 flex flex-col p-4 gap-1.5 overflow-y-auto scrollbar-thin">
+        <div className="text-center py-2 mb-1">
+          <h2 className="text-xl font-extrabold text-[#e94560] uppercase tracking-[0.2em] leading-none drop-shadow-[0_0_8px_rgba(233,69,96,0.3)]">Fling Thing</h2>
+          <div className="text-[9px] text-gray-500 tracking-[0.3em] uppercase mt-1">a Tim Cao game</div>
         </div>
 
-        <div className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold mt-1">Blocks</div>
-        {passiveBlocks.map(renderBlockItem)}
+        <div className="bg-gradient-to-r from-[#0f3460] to-[#0d2b52] rounded-xl py-2.5 px-4 text-center mb-2 border border-yellow-400/10">
+          <span className="text-lg font-bold text-yellow-400 drop-shadow-[0_0_6px_rgba(250,204,21,0.2)]">🪙 {coins}</span>
+          <span className="text-sm text-yellow-400/60 ml-1.5">Gold</span>
+        </div>
 
-        <div className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold mt-1">Powered ⚡</div>
-        {poweredBlocks.map(renderBlockItem)}
+        <div className="text-[10px] text-[#e94560]/60 uppercase tracking-[0.15em] font-bold mt-1 mb-0.5 px-1">Blocks</div>
+        <div className="flex flex-col gap-1.5">
+          {passiveBlocks.map(renderBlockItem)}
+        </div>
 
-        <div className="mt-auto pt-2 text-[10px] text-gray-600 leading-relaxed space-y-0.5 border-t border-gray-700/50">
-          <div>Left-click: Place block</div>
-          <div>Right-click: Rotate preview / block</div>
-          <div>Scroll on powered: Change group</div>
-          <div>Del: Remove (refund)</div>
-          <div>0-9/Q/W/E/R/T: Select block</div>
-          <div>Esc: Deselect</div>
-          <div className="text-gray-700 mt-1">Run: Hold 1-9 to activate groups</div>
-          <div className="text-gray-700">Space/F: Speed toggle</div>
+        <div className="text-[10px] text-[#e94560]/60 uppercase tracking-[0.15em] font-bold mt-2 mb-0.5 px-1">Powered ⚡</div>
+        <div className="flex flex-col gap-1.5">
+          {poweredBlocks.map(renderBlockItem)}
+        </div>
+
+        <div className="mt-auto pt-3 text-[10px] text-gray-600 leading-relaxed space-y-0.5 border-t border-white/5">
+          <div className="text-[9px] text-gray-500 uppercase tracking-wider font-semibold mb-1">Controls</div>
+          <div>Click: Place / Pick up</div>
+          <div>Right-click: Rotate</div>
+          <div>Scroll: Change group</div>
+          <div>Del: Remove</div>
+          <div className="text-gray-700 mt-1">During sim: 1-9 activate groups</div>
+          <div className="text-gray-700">Space/F: Speed · R/Esc: Stop</div>
         </div>
       </div>
 
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Toolbar */}
-        <div className="h-12 bg-[#16213e] border-b-2 border-[#0f3460] flex items-center px-4 gap-3">
+        <div className="h-14 bg-gradient-to-r from-[#16213e] to-[#141d33] border-b border-[#1a3a6e]/40 flex items-center px-5 gap-3">
           {mode === 'edit' && (
             <>
               <button
                 onClick={handleRun}
                 disabled={!ballPlaced}
-                className={`px-5 py-1.5 rounded-md font-semibold text-sm ${
+                className={`px-6 py-2 rounded-lg font-bold text-sm tracking-wide transition-all ${
                   ballPlaced
-                    ? 'bg-emerald-600 text-white hover:bg-emerald-500 cursor-pointer'
-                    : 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                    ? 'bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_12px_rgba(16,185,129,0.3)] cursor-pointer'
+                    : 'bg-gray-700/50 text-gray-500 cursor-not-allowed'
                 }`}
               >
                 ▶ Run
               </button>
               <button
                 onClick={handleReset}
-                className="px-5 py-1.5 rounded-md font-semibold text-sm bg-[#e94560] text-white hover:bg-[#d63851] cursor-pointer"
+                className="px-5 py-2 rounded-lg font-semibold text-sm bg-[#e94560]/80 text-white hover:bg-[#e94560] transition-all cursor-pointer"
               >
-                ↺ Reset
+                ↺ Clear
               </button>
               {selectedBlock && preRotation > 0 && (
-                <span className="text-xs text-gray-400">
-                  Rotation: {preRotation * 90}°
+                <span className="text-xs text-gray-400 bg-white/5 px-2 py-1 rounded">
+                  {preRotation * 90}°
                 </span>
               )}
               {!ballPlaced && (
-                <span className="text-xs text-gray-500 ml-2">Place the ball to enable Run</span>
+                <span className="text-xs text-gray-500/80 ml-2">Place the ball to run</span>
               )}
             </>
           )}
           {mode === 'running' && (
             <>
-              <span className="text-sm text-yellow-400 animate-pulse">Simulating...</span>
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="text-sm text-emerald-400 font-semibold">Simulating</span>
+              </div>
               <button
                 onClick={handleSpeedToggle}
-                className="px-3 py-1 rounded-md text-xs font-semibold bg-[#0f3460] text-yellow-400 hover:bg-[#1a3a6e] cursor-pointer border border-yellow-400/30"
+                className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-white/5 text-yellow-400 hover:bg-white/10 cursor-pointer border border-yellow-400/20 transition-all"
               >
-                {speed}x Speed
+                {speed}x
               </button>
-              <span className="text-[10px] text-gray-500 ml-2">Hold 1-9 to activate block groups</span>
+              <button
+                onClick={handleBackToEdit}
+                className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-white/5 text-gray-400 hover:bg-white/10 cursor-pointer border border-white/10 transition-all"
+              >
+                Stop
+              </button>
+              <span className="text-[10px] text-gray-600 ml-1">Hold 1-9 for groups</span>
             </>
           )}
           {mode === 'results' && (
             <button
               onClick={handleBackToEdit}
-              className="px-5 py-1.5 rounded-md font-semibold text-sm bg-emerald-600 text-white hover:bg-emerald-500 cursor-pointer"
+              className="px-6 py-2 rounded-lg font-bold text-sm bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_12px_rgba(16,185,129,0.3)] cursor-pointer transition-all"
             >
-              ← Back to Edit
+              ← Edit
             </button>
           )}
-          <span className="ml-auto text-xs text-gray-500">
-            🏆 Best: <span className="text-yellow-400 font-semibold">{bestDistance.toFixed(1)}</span> blocks
-          </span>
+          <div className="ml-auto flex items-center gap-2 bg-white/5 rounded-lg px-3 py-1.5">
+            <span className="text-[10px] text-gray-500 uppercase tracking-wider">Best</span>
+            <span className="text-sm text-yellow-400 font-bold">{bestDistance.toFixed(1)}</span>
+            <span className="text-[10px] text-gray-500">m</span>
+          </div>
         </div>
 
         {/* Canvas */}
@@ -749,57 +767,64 @@ export default function Game() {
           {/* Results overlay */}
           {mode === 'results' && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-              <div className="bg-[#16213e] border-2 border-[#0f3460] rounded-2xl p-10 text-center shadow-2xl min-w-[300px]">
-                <div className="text-5xl mb-3">🏆</div>
-                <h2 className="text-3xl font-bold text-white mb-1">
-                  {currentDistance.toFixed(1)} blocks
+              <div className="bg-gradient-to-b from-[#16213e] to-[#111d35] border border-[#1a3a6e]/50 rounded-2xl p-10 text-center shadow-[0_20px_60px_rgba(0,0,0,0.5)] min-w-[320px]">
+                <div className="text-5xl mb-4">🏆</div>
+                <div className="text-[10px] text-gray-500 uppercase tracking-[0.2em] mb-1">Distance</div>
+                <h2 className="text-4xl font-extrabold text-white mb-1">
+                  {currentDistance.toFixed(1)}<span className="text-lg text-gray-400 ml-1">m</span>
                 </h2>
                 {currentDistance >= bestDistance && currentDistance > 0 ? (
-                  <p className="text-yellow-400 text-sm mb-6 font-semibold">🎉 New personal best!</p>
+                  <p className="text-yellow-400 text-sm mb-8 font-semibold">New personal best!</p>
                 ) : (
-                  <p className="text-gray-400 text-sm mb-6">
-                    Best: {bestDistance.toFixed(1)} blocks
+                  <p className="text-gray-500 text-sm mb-8">
+                    Best: {bestDistance.toFixed(1)}m
                   </p>
                 )}
                 <button
                   onClick={handleBackToEdit}
-                  className="px-8 py-2.5 rounded-lg font-semibold bg-emerald-600 text-white hover:bg-emerald-500 cursor-pointer text-base"
+                  className="px-8 py-2.5 rounded-xl font-bold bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_16px_rgba(16,185,129,0.3)] cursor-pointer text-base transition-all"
                 >
-                  ← Back to Edit
+                  ← Edit
                 </button>
+                <div className="text-[10px] text-gray-600 mt-3">Press R or Esc</div>
               </div>
             </div>
           )}
 
           {/* Intro popup */}
           {showIntro && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm z-10">
-              <div className="bg-[#16213e] border-2 border-[#0f3460] rounded-2xl p-10 text-center shadow-2xl max-w-[420px]">
-                <h1 className="text-3xl font-extrabold text-[#e94560] uppercase tracking-wider mb-1">Fling Thing</h1>
-                <p className="text-[10px] text-gray-500 tracking-[0.3em] uppercase mb-6">a Tim Cao game</p>
-                <p className="text-gray-300 text-sm leading-relaxed mb-2">
-                  Build a contraption to launch the ball as far right as possible.
-                </p>
-                <p className="text-gray-400 text-xs leading-relaxed mb-6">
-                  Place blocks on the grid, position your ball, and hit Run.
-                  Distance is measured from the end of the build zone.
-                </p>
-                <div className="flex items-center justify-center gap-3 mb-6">
-                  <div className="flex items-center gap-1.5 text-xs text-yellow-400">
-                    <span className="inline-block w-3 h-3 rounded-sm bg-[#e94560]" />
-                    Ball
-                  </div>
-                  <span className="text-gray-600">+</span>
-                  <div className="flex items-center gap-1.5 text-xs text-yellow-400">
-                    <span className="inline-block w-3 h-3 rounded-sm bg-[#7f8c8d]" />
-                    Blocks
-                  </div>
-                  <span className="text-gray-600">=</span>
-                  <span className="text-xs text-yellow-400 font-semibold">Distance!</span>
+            <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-md z-10">
+              <div className="bg-gradient-to-b from-[#16213e] to-[#111d35] border border-[#1a3a6e]/50 rounded-2xl p-10 text-center shadow-[0_20px_60px_rgba(0,0,0,0.5)] max-w-[440px]">
+                <h1 className="text-4xl font-extrabold text-[#e94560] uppercase tracking-[0.15em] mb-1 drop-shadow-[0_0_12px_rgba(233,69,96,0.3)]">Fling Thing</h1>
+                <p className="text-[10px] text-gray-500 tracking-[0.3em] uppercase mb-8">a Tim Cao game</p>
+
+                <div className="bg-white/5 rounded-xl p-5 mb-6 text-left space-y-3">
+                  <p className="text-gray-200 text-sm leading-relaxed">
+                    Build a contraption to launch the ball as far <span className="text-yellow-400 font-semibold">right</span> as possible.
+                  </p>
+                  <p className="text-gray-400 text-xs leading-relaxed">
+                    Place blocks on the grid, position your ball, and hit Run.
+                    Distance is measured from the end of the build zone.
+                  </p>
                 </div>
+
+                <div className="flex items-center justify-center gap-4 mb-8">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="inline-block w-4 h-4 rounded bg-[#e94560] shadow-[0_0_6px_rgba(233,69,96,0.4)]" />
+                    <span className="text-gray-300">Ball</span>
+                  </div>
+                  <span className="text-gray-600 text-lg">+</span>
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="inline-block w-4 h-4 rounded bg-[#7f8c8d]" />
+                    <span className="text-gray-300">Blocks</span>
+                  </div>
+                  <span className="text-gray-600 text-lg">=</span>
+                  <span className="text-sm text-yellow-400 font-bold">Distance!</span>
+                </div>
+
                 <button
                   onClick={() => setShowIntro(false)}
-                  className="px-10 py-3 rounded-lg font-bold bg-emerald-600 text-white hover:bg-emerald-500 cursor-pointer text-base tracking-wide"
+                  className="px-12 py-3.5 rounded-xl font-bold bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_20px_rgba(16,185,129,0.3)] cursor-pointer text-lg tracking-wide transition-all"
                 >
                   Play
                 </button>
