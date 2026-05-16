@@ -70,26 +70,40 @@ export default function Game() {
   const preRotationRef = useRef(0);
   const activeGroupsRef = useRef<Set<number>>(new Set());
   const heldKeysRef = useRef<Set<string>>(new Set());
+  const paintingRef = useRef(false);
+  const lastPaintCellRef = useRef<string | null>(null);
 
-  const [blocks, setBlocks] = useState<PlacedBlock[]>([]);
-  const [coins, setCoins] = useState(STARTING_COINS);
+  const [blocks, setBlocks] = useState<PlacedBlock[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try { const s = localStorage.getItem('fling-blocks'); return s ? JSON.parse(s) : []; } catch { return []; }
+  });
+  const [coins, setCoins] = useState(() => {
+    if (typeof window === 'undefined') return STARTING_COINS;
+    try { const s = localStorage.getItem('fling-coins'); return s ? Number(s) : STARTING_COINS; } catch { return STARTING_COINS; }
+  });
   const [selectedBlock, setSelectedBlock] = useState<BlockType | null>(null);
   const [mode, setMode] = useState<GameMode>('edit');
-  const [bestDistance, setBestDistance] = useState(0);
+  const [bestDistance, setBestDistance] = useState(() => {
+    if (typeof window === 'undefined') return 0;
+    try { const s = localStorage.getItem('fling-best'); return s ? Number(s) : 0; } catch { return 0; }
+  });
   const [currentDistance, setCurrentDistance] = useState(0);
   const [hoverCell, setHoverCell] = useState<{ col: number; row: number } | null>(null);
   const [speed, setSpeed] = useState(1);
   const [preRotation, setPreRotation] = useState(0);
-  const [showIntro, setShowIntro] = useState(true);
+  const [showIntro, setShowIntro] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return !localStorage.getItem('fling-blocks');
+  });
 
   const ballPlaced = blocks.some((b) => b.type === 'ball');
 
-  useEffect(() => { blocksRef.current = blocks; ballPlacedRef.current = blocks.some(b => b.type === 'ball'); }, [blocks]);
+  useEffect(() => { blocksRef.current = blocks; ballPlacedRef.current = blocks.some(b => b.type === 'ball'); localStorage.setItem('fling-blocks', JSON.stringify(blocks)); }, [blocks]);
   useEffect(() => { modeRef.current = mode; }, [mode]);
   useEffect(() => { hoverCellRef.current = hoverCell; }, [hoverCell]);
   useEffect(() => { selectedBlockRef.current = selectedBlock; }, [selectedBlock]);
-  useEffect(() => { coinsRef.current = coins; }, [coins]);
-  useEffect(() => { bestDistanceRef.current = bestDistance; }, [bestDistance]);
+  useEffect(() => { coinsRef.current = coins; localStorage.setItem('fling-coins', String(coins)); }, [coins]);
+  useEffect(() => { bestDistanceRef.current = bestDistance; localStorage.setItem('fling-best', String(bestDistance)); }, [bestDistance]);
   useEffect(() => { speedRef.current = speed; }, [speed]);
   useEffect(() => { preRotationRef.current = preRotation; }, [preRotation]);
 
@@ -375,6 +389,37 @@ export default function Game() {
     });
   }, []);
 
+  const handleExport = useCallback(() => {
+    const data = JSON.stringify({ blocks: blocksRef.current, coins: coinsRef.current }, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'fling-thing-build.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const handleImport = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const data = JSON.parse(ev.target?.result as string);
+          if (data.blocks) setBlocks(data.blocks);
+          if (data.coins != null) setCoins(data.coins);
+        } catch { /* ignore bad files */ }
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  }, []);
+
   // --- CANVAS EVENTS ---
 
   const getGridCell = useCallback(
@@ -396,16 +441,13 @@ export default function Game() {
     [],
   );
 
-  const handleCanvasClick = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (modeRef.current !== 'edit') return;
-      const cell = getGridCell(e.clientX, e.clientY);
-      if (!cell) return;
-
+  const placeBlockAt = useCallback(
+    (cell: { col: number; row: number }, pickUp: boolean) => {
       setBlocks((prev) => {
         const existingIndex = prev.findIndex((b) => b.col === cell.col && b.row === cell.row);
 
         if (existingIndex >= 0) {
+          if (!pickUp) return prev;
           const existing = prev[existingIndex];
           const remaining = prev.filter((_, i) => i !== existingIndex);
           if (existing.type !== 'ball') {
@@ -438,8 +480,25 @@ export default function Game() {
         }];
       });
     },
-    [getGridCell],
+    [],
   );
+
+  const handleCanvasMouseDown = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (e.button !== 0 || modeRef.current !== 'edit') return;
+      paintingRef.current = true;
+      const cell = getGridCell(e.clientX, e.clientY);
+      if (!cell) return;
+      lastPaintCellRef.current = `${cell.col},${cell.row}`;
+      placeBlockAt(cell, true);
+    },
+    [getGridCell, placeBlockAt],
+  );
+
+  const handleCanvasMouseUp = useCallback(() => {
+    paintingRef.current = false;
+    lastPaintCellRef.current = null;
+  }, []);
 
   const handleCanvasRightClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -472,8 +531,16 @@ export default function Game() {
       if (modeRef.current !== 'edit') return;
       const cell = getGridCell(e.clientX, e.clientY);
       setHoverCell(cell);
+
+      if (paintingRef.current && cell && selectedBlockRef.current) {
+        const key = `${cell.col},${cell.row}`;
+        if (key !== lastPaintCellRef.current) {
+          lastPaintCellRef.current = key;
+          placeBlockAt(cell, false);
+        }
+      }
     },
-    [getGridCell],
+    [getGridCell, placeBlockAt],
   );
 
   const handleCanvasWheel = useCallback(
@@ -599,7 +666,7 @@ export default function Game() {
           if (prev !== type) setPreRotation(0);
           return prev === type ? null : type;
         })}
-        className={`w-full flex items-center gap-3 p-2.5 rounded-xl border-2 transition-all text-left ${
+        className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl border-2 transition-all text-left ${
           isSelected
             ? 'border-[#e94560] bg-[#1a3a6e] shadow-[0_0_12px_rgba(233,69,96,0.25)]'
             : disabled
@@ -672,27 +739,43 @@ export default function Game() {
           {poweredBlocks.map(renderBlockItem)}
         </div>
 
-        <div className="mt-auto pt-3 text-[10px] text-gray-600 leading-relaxed space-y-0.5 border-t border-white/5">
-          <div className="text-[9px] text-gray-500 uppercase tracking-wider font-semibold mb-1">Controls</div>
-          <div>Click: Place / Pick up</div>
-          <div>Right-click: Rotate</div>
-          <div>Scroll: Change group</div>
-          <div>Del: Remove</div>
-          <div className="text-gray-700 mt-1">During sim: 1-9 activate groups</div>
-          <div className="text-gray-700">Space/F: Speed · R/Esc: Stop</div>
+        <div className="mt-auto pt-3 border-t border-white/5">
+          <div className="flex gap-2 mb-3">
+            <button
+              onClick={handleExport}
+              disabled={blocks.length === 0}
+              className="flex-1 px-3 py-2 rounded-lg text-[10px] font-semibold bg-white/5 text-gray-400 hover:bg-white/10 hover:text-gray-300 cursor-pointer border border-white/5 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              Export
+            </button>
+            <button
+              onClick={handleImport}
+              className="flex-1 px-3 py-2 rounded-lg text-[10px] font-semibold bg-white/5 text-gray-400 hover:bg-white/10 hover:text-gray-300 cursor-pointer border border-white/5 transition-all"
+            >
+              Import
+            </button>
+          </div>
+          <div className="text-[10px] text-gray-600 leading-relaxed space-y-0.5">
+            <div className="text-[9px] text-gray-500 uppercase tracking-wider font-semibold mb-1">Controls</div>
+            <div>Click / drag: Place blocks</div>
+            <div>Right-click: Rotate</div>
+            <div>Scroll: Change group</div>
+            <div>Del: Remove</div>
+            <div className="text-gray-700 mt-1">Sim: 1-9 groups · Space speed · R stop</div>
+          </div>
         </div>
       </div>
 
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Toolbar */}
-        <div className="h-14 bg-gradient-to-r from-[#16213e] to-[#141d33] border-b border-[#1a3a6e]/40 flex items-center px-5 gap-3">
+        <div className="h-14 bg-gradient-to-r from-[#16213e] to-[#141d33] border-b border-[#1a3a6e]/40 flex items-center px-5 gap-4">
           {mode === 'edit' && (
             <>
               <button
                 onClick={handleRun}
                 disabled={!ballPlaced}
-                className={`px-6 py-2 rounded-lg font-bold text-sm tracking-wide transition-all ${
+                className={`px-7 py-2.5 rounded-xl font-bold text-sm tracking-wide transition-all ${
                   ballPlaced
                     ? 'bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_12px_rgba(16,185,129,0.3)] cursor-pointer'
                     : 'bg-gray-700/50 text-gray-500 cursor-not-allowed'
@@ -702,12 +785,12 @@ export default function Game() {
               </button>
               <button
                 onClick={handleReset}
-                className="px-5 py-2 rounded-lg font-semibold text-sm bg-[#e94560]/80 text-white hover:bg-[#e94560] transition-all cursor-pointer"
+                className="px-6 py-2.5 rounded-xl font-semibold text-sm bg-[#e94560]/80 text-white hover:bg-[#e94560] transition-all cursor-pointer"
               >
                 ↺ Clear
               </button>
               {selectedBlock && preRotation > 0 && (
-                <span className="text-xs text-gray-400 bg-white/5 px-2 py-1 rounded">
+                <span className="text-xs text-gray-400 bg-white/5 px-3 py-1.5 rounded-lg">
                   {preRotation * 90}°
                 </span>
               )}
@@ -724,13 +807,13 @@ export default function Game() {
               </div>
               <button
                 onClick={handleSpeedToggle}
-                className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-white/5 text-yellow-400 hover:bg-white/10 cursor-pointer border border-yellow-400/20 transition-all"
+                className="px-5 py-2 rounded-xl text-xs font-bold bg-white/5 text-yellow-400 hover:bg-white/10 cursor-pointer border border-yellow-400/20 transition-all"
               >
                 {speed}x
               </button>
               <button
                 onClick={handleBackToEdit}
-                className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-white/5 text-gray-400 hover:bg-white/10 cursor-pointer border border-white/10 transition-all"
+                className="px-5 py-2 rounded-xl text-xs font-semibold bg-white/5 text-gray-400 hover:bg-white/10 cursor-pointer border border-white/10 transition-all"
               >
                 Stop
               </button>
@@ -740,12 +823,12 @@ export default function Game() {
           {mode === 'results' && (
             <button
               onClick={handleBackToEdit}
-              className="px-6 py-2 rounded-lg font-bold text-sm bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_12px_rgba(16,185,129,0.3)] cursor-pointer transition-all"
+              className="px-7 py-2.5 rounded-xl font-bold text-sm bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_12px_rgba(16,185,129,0.3)] cursor-pointer transition-all"
             >
               ← Edit
             </button>
           )}
-          <div className="ml-auto flex items-center gap-2 bg-white/5 rounded-lg px-3 py-1.5">
+          <div className="ml-auto flex items-center gap-2.5 bg-white/5 rounded-xl px-4 py-2">
             <span className="text-[10px] text-gray-500 uppercase tracking-wider">Best</span>
             <span className="text-sm text-yellow-400 font-bold">{bestDistance.toFixed(1)}</span>
             <span className="text-[10px] text-gray-500">m</span>
@@ -756,10 +839,11 @@ export default function Game() {
         <div className="flex-1 relative min-h-0 overflow-hidden">
           <canvas
             ref={canvasRef}
-            onClick={handleCanvasClick}
+            onMouseDown={handleCanvasMouseDown}
+            onMouseUp={handleCanvasMouseUp}
             onContextMenu={handleCanvasRightClick}
             onMouseMove={handleCanvasMouseMove}
-            onMouseLeave={() => setHoverCell(null)}
+            onMouseLeave={() => { setHoverCell(null); paintingRef.current = false; lastPaintCellRef.current = null; }}
             onWheel={handleCanvasWheel}
             className="block w-full h-full"
           />
@@ -782,11 +866,11 @@ export default function Game() {
                 )}
                 <button
                   onClick={handleBackToEdit}
-                  className="px-8 py-2.5 rounded-xl font-bold bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_16px_rgba(16,185,129,0.3)] cursor-pointer text-base transition-all"
+                  className="px-10 py-3 rounded-xl font-bold bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_16px_rgba(16,185,129,0.3)] cursor-pointer text-base transition-all"
                 >
                   ← Edit
                 </button>
-                <div className="text-[10px] text-gray-600 mt-3">Press R or Esc</div>
+                <div className="text-[10px] text-gray-600 mt-4">Press R or Esc</div>
               </div>
             </div>
           )}
