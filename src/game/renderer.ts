@@ -7,7 +7,8 @@ import {
   BALL_RADIUS,
   BLOCK_CONFIGS,
   COLORS,
-  GROUPED_TYPES,
+  POWERED_TYPES,
+  POWERED_TYPE_KEY,
   FAN_RANGE,
   GRAVITY_WELL_RADIUS,
   BlockType,
@@ -232,44 +233,6 @@ export function drawBlockShape(
       ctx.strokeRect(x + 4, y + 4, CELL_SIZE - 8, CELL_SIZE - 8);
       ctx.setLineDash([]);
       break;
-    case 'sticky': {
-      ctx.fillStyle = config.color;
-      ctx.fillRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
-      // Gooey drip lines
-      ctx.strokeStyle = config.secondaryColor || '#a1887f';
-      ctx.lineWidth = 2;
-      for (let i = 0; i < 3; i++) {
-        const sx = x + 8 + i * 12;
-        ctx.beginPath();
-        ctx.moveTo(sx, y + CELL_SIZE - 2);
-        ctx.quadraticCurveTo(sx + 2, y + CELL_SIZE + 4, sx - 1, y + CELL_SIZE + 6);
-        ctx.stroke();
-      }
-      ctx.fillStyle = 'rgba(0,0,0,0.15)';
-      ctx.fillRect(x + 3, y + 3, CELL_SIZE - 6, CELL_SIZE - 6);
-      break;
-    }
-    case 'glass': {
-      ctx.fillStyle = 'rgba(179, 229, 252, 0.3)';
-      ctx.fillRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
-      ctx.strokeStyle = 'rgba(179, 229, 252, 0.6)';
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
-      // Shine diagonal
-      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(x + 4, y + CELL_SIZE * 0.6);
-      ctx.lineTo(x + CELL_SIZE * 0.4, y + 4);
-      ctx.stroke();
-      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x + 8, y + CELL_SIZE * 0.7);
-      ctx.lineTo(x + CELL_SIZE * 0.5, y + 6);
-      ctx.stroke();
-      break;
-    }
     case 'fan': {
       ctx.fillStyle = 'rgba(38, 198, 218, 0.3)';
       ctx.fillRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
@@ -448,14 +411,15 @@ export function drawPlacedBlock(
   camX: number,
   camY: number,
   frameCount: number,
-  activeGroups?: Set<number>,
+  activeTypes?: Set<BlockType>,
 ) {
   const x = ox + block.col * CELL_SIZE - camX;
   const y = oy + block.row * CELL_SIZE - camY;
   drawBlockShape(ctx, block.type, x, y, block.rotation);
 
-  const isGrouped = GROUPED_TYPES.includes(block.type);
-  if (isGrouped) {
+  const isPowered = POWERED_TYPES.includes(block.type);
+  if (isPowered) {
+    const keyLabel = POWERED_TYPE_KEY[block.type];
     ctx.save();
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.beginPath();
@@ -465,10 +429,10 @@ export function drawPlacedBlock(
     ctx.font = 'bold 9px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(String(block.group), x + CELL_SIZE - 8, y + 8);
+    ctx.fillText(keyLabel, x + CELL_SIZE - 8, y + 8);
     ctx.restore();
 
-    if (activeGroups && activeGroups.has(block.group) && block.type !== 'portal') {
+    if (activeTypes && activeTypes.has(block.type) && block.type !== 'portal') {
       const pulse = Math.sin(frameCount * 0.1) * 0.15 + 0.25;
       ctx.save();
       ctx.globalAlpha = pulse;
@@ -743,20 +707,20 @@ export function drawDistanceHUD(ctx: CanvasRenderingContext2D, w: number, distan
   ctx.restore();
 }
 
-export function drawGroupHUD(
+export function drawPoweredHUD(
   ctx: CanvasRenderingContext2D,
-  existingGroups: number[],
-  activeGroups: Set<number>,
+  poweredTypes: BlockType[],
+  activeTypes: Set<BlockType>,
 ) {
-  if (existingGroups.length === 0) return;
+  if (poweredTypes.length === 0) return;
 
   ctx.save();
   const hudX = 16;
   const hudY = 16;
-  const chipW = 28;
+  const chipW = 44;
   const chipH = 28;
   const gap = 4;
-  const totalW = existingGroups.length * (chipW + gap) - gap + 16;
+  const totalW = poweredTypes.length * (chipW + gap) - gap + 16;
 
   ctx.fillStyle = 'rgba(15, 52, 96, 0.85)';
   ctx.beginPath();
@@ -766,23 +730,29 @@ export function drawGroupHUD(
   ctx.font = 'bold 8px sans-serif';
   ctx.fillStyle = 'rgba(255,255,255,0.4)';
   ctx.textAlign = 'left';
-  ctx.fillText('GROUPS', hudX + 6, hudY + 10);
+  ctx.fillText('HOLD KEY', hudX + 6, hudY + 10);
 
-  existingGroups.forEach((g, i) => {
+  poweredTypes.forEach((type, i) => {
     const gx = hudX + 8 + i * (chipW + gap);
     const gy = hudY + 16;
-    const active = activeGroups.has(g);
+    const active = activeTypes.has(type);
+    const keyLabel = POWERED_TYPE_KEY[type];
+    const config = BLOCK_CONFIGS[type];
 
     ctx.fillStyle = active ? 'rgba(255, 215, 0, 0.8)' : 'rgba(255,255,255,0.15)';
     ctx.beginPath();
     ctx.roundRect(gx, gy, chipW, chipH - 6, 4);
     ctx.fill();
 
-    ctx.fillStyle = active ? '#000' : 'rgba(255,255,255,0.5)';
-    ctx.font = 'bold 12px sans-serif';
+    ctx.fillStyle = active ? '#000' : 'rgba(255,255,255,0.7)';
+    ctx.font = 'bold 10px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(String(g), gx + chipW / 2, gy + (chipH - 6) / 2);
+    ctx.fillText(`${keyLabel}`, gx + 10, gy + (chipH - 6) / 2);
+
+    ctx.fillStyle = active ? '#000' : 'rgba(255,255,255,0.4)';
+    ctx.font = '8px sans-serif';
+    ctx.fillText(config.name.slice(0, 5), gx + 32, gy + (chipH - 6) / 2);
   });
 
   ctx.restore();
@@ -794,7 +764,7 @@ export function drawSimulationEffects(
   ox: number,
   oy: number,
   cam: Camera,
-  activeGroups: Set<number>,
+  activeTypes: Set<BlockType>,
   frameCount: number,
   sim: SimulationState | null,
 ) {
@@ -804,7 +774,6 @@ export function drawSimulationEffects(
 
     switch (block.type) {
       case 'fan': {
-        // Animated wind lines
         const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
         const [fdx, fdy] = dirs[block.rotation % 4];
         ctx.save();
@@ -826,7 +795,6 @@ export function drawSimulationEffects(
       }
       case 'gravitypad': {
         if (sim?.gravityEffect) {
-          // Pulse effect when active
           const pulse = Math.sin(frameCount * 0.15) * 0.3 + 0.3;
           ctx.save();
           ctx.globalAlpha = pulse;
@@ -839,7 +807,6 @@ export function drawSimulationEffects(
         break;
       }
       case 'portal': {
-        // Always-swirling animation
         ctx.save();
         for (let i = 0; i < 6; i++) {
           const angle = frameCount * 0.08 + (i / 6) * Math.PI * 2;
@@ -855,7 +822,7 @@ export function drawSimulationEffects(
         break;
       }
       case 'piston': {
-        if (!activeGroups.has(block.group)) break;
+        if (!activeTypes.has('piston')) break;
         const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
         const [dx, dy] = dirs[block.rotation % 4];
         ctx.fillStyle = 'rgba(46, 204, 113, 0.7)';
@@ -865,7 +832,7 @@ export function drawSimulationEffects(
         break;
       }
       case 'blackhole': {
-        if (!activeGroups.has(block.group)) break;
+        if (!activeTypes.has('blackhole')) break;
         ctx.save();
         for (let i = 0; i < 10; i++) {
           const angle = frameCount * 0.06 + (i / 10) * Math.PI * 2;
@@ -881,7 +848,7 @@ export function drawSimulationEffects(
         break;
       }
       case 'whitehole': {
-        if (!activeGroups.has(block.group)) break;
+        if (!activeTypes.has('whitehole')) break;
         const pulseR = (frameCount % 25) / 25 * GRAVITY_WELL_RADIUS * 0.3;
         ctx.save();
         ctx.globalAlpha = 0.2 * (1 - (frameCount % 25) / 25);

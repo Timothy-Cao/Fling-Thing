@@ -10,8 +10,7 @@ import {
   BOUNCY_RESTITUTION,
   ICE_FRICTION,
   CURVE_FRICTION,
-  STICKY_FRICTION,
-  STICKY_RESTITUTION,
+  CURVE_RESTITUTION,
   GRAVITY_WELL_RADIUS,
   GRAVITY_WELL_STRENGTH,
   BLACKHOLE_CAPTURE_RADIUS,
@@ -23,9 +22,9 @@ import {
   GRAVITY_PAD_DURATION,
   PORTAL_RADIUS,
   PORTAL_COOLDOWN,
-  POWERED_TYPES,
   FLOOR_THICKNESS,
   FLOOR_EXTEND_RIGHT,
+  BlockType,
 } from './constants';
 import { PlacedBlock } from './types';
 import { getRampVertices, getCurveVertices } from './renderer';
@@ -59,6 +58,8 @@ export function createPhysicsBody(block: PlacedBlock, offsetX: number, offsetY: 
       return Bodies.fromVertices(cx + centroidX, cy + centroidY, [verts], {
         isStatic: true,
         friction: CURVE_FRICTION,
+        restitution: CURVE_RESTITUTION,
+        label: `curve_${block.col}_${block.row}_${block.rotation}`,
       });
     }
     case 'ice':
@@ -72,24 +73,11 @@ export function createPhysicsBody(block: PlacedBlock, offsetX: number, offsetY: 
         restitution: BOUNCY_RESTITUTION,
         friction: 0.01,
       });
-    case 'sticky':
-      return Bodies.rectangle(cx, cy, CELL_SIZE, CELL_SIZE, {
-        isStatic: true,
-        friction: STICKY_FRICTION,
-        restitution: STICKY_RESTITUTION,
-      });
-    case 'glass':
-      return Bodies.rectangle(cx, cy, CELL_SIZE, CELL_SIZE, {
-        isStatic: true,
-        friction: 0.3,
-        label: `glass_${block.col}_${block.row}`,
-      });
     case 'piston':
       return Bodies.rectangle(cx, cy, CELL_SIZE, CELL_SIZE * 0.5, {
         isStatic: true,
         friction: 0.5,
       });
-    // fan, gravitypad, blackhole, whitehole, portal, bomb have no resting physics body
     default:
       return null;
   }
@@ -101,8 +89,6 @@ export interface SimulationState {
   ballBody: Matter.Body;
   pistonArms: Map<string, Matter.Body>;
   removedBombs: Set<string>;
-  glassBodies: Map<string, Matter.Body>;
-  brokenGlass: Set<string>;
   portalCooldown: number;
   gravityEffect: { dx: number; dy: number; framesLeft: number } | null;
   shockwaves: { x: number; y: number; frame: number }[];
@@ -127,7 +113,7 @@ export function startSimulation(
     oy + BUILD_HEIGHT + FLOOR_THICKNESS / 2,
     FLOOR_EXTEND_RIGHT,
     FLOOR_THICKNESS,
-    { isStatic: true, friction: 0.5 },
+    { isStatic: true, friction: 0.3, restitution: 0.6 },
   );
 
   const leftWall = Bodies.rectangle(ox - 20, oy + BUILD_HEIGHT / 2, 40, BUILD_HEIGHT + 200, {
@@ -147,16 +133,11 @@ export function startSimulation(
   });
   bodiesToAdd.push(ballBody);
 
-  const glassBodies = new Map<string, Matter.Body>();
-
   blocks.forEach((block) => {
     if (block.type === 'ball') return;
     const body = createPhysicsBody(block, ox, oy);
     if (body) {
       bodiesToAdd.push(body);
-      if (block.type === 'glass') {
-        glassBodies.set(blockKey(block), body);
-      }
     }
   });
 
@@ -168,29 +149,60 @@ export function startSimulation(
     ballBody,
     pistonArms: new Map(),
     removedBombs: new Set(),
-    glassBodies,
-    brokenGlass: new Set(),
     portalCooldown: 0,
     gravityEffect: null,
     shockwaves: [],
   };
 
-  // Glass collision handler
+  // Curve collision handler: redirect velocity along curve surface
   Events.on(engine, 'collisionStart', (event) => {
     event.pairs.forEach((pair) => {
       const { bodyA, bodyB } = pair;
-      const glassBody = bodyA.label?.startsWith('glass_') ? bodyA
-        : bodyB.label?.startsWith('glass_') ? bodyB : null;
-      if (!glassBody) return;
-      const otherBody = glassBody === bodyA ? bodyB : bodyA;
+      const curveBody = bodyA.label?.startsWith('curve_') ? bodyA
+        : bodyB.label?.startsWith('curve_') ? bodyB : null;
+      if (!curveBody) return;
+      const otherBody = curveBody === bodyA ? bodyB : bodyA;
       if (otherBody.label !== 'ball') return;
 
-      const key = glassBody.label!.replace('glass_', '').replace('_', ',');
-      if (!sim.brokenGlass.has(key)) {
-        sim.brokenGlass.add(key);
-        World.remove(engine.world, glassBody);
-        sim.glassBodies.delete(key);
+      const speed = Math.sqrt(otherBody.velocity.x ** 2 + otherBody.velocity.y ** 2);
+      if (speed < 0.5) return;
+
+      const parts = curveBody.label!.split('_');
+      const rotation = parseInt(parts[3]);
+
+      // Redirect velocity based on curve rotation
+      // Curves convert vertical motion to horizontal (or vice versa)
+      let newVx = otherBody.velocity.x;
+      let newVy = otherBody.velocity.y;
+
+      switch (rotation % 4) {
+        case 0: // bottom-left to top-right: converts downward to rightward
+          if (Math.abs(otherBody.velocity.y) > Math.abs(otherBody.velocity.x)) {
+            newVx = speed * 0.85;
+            newVy = -speed * 0.3;
+          }
+          break;
+        case 1: // bottom-right to top-left: converts downward to leftward
+          if (Math.abs(otherBody.velocity.y) > Math.abs(otherBody.velocity.x)) {
+            newVx = -speed * 0.85;
+            newVy = -speed * 0.3;
+          }
+          break;
+        case 2: // top-right to bottom-left: converts rightward to downward
+          if (Math.abs(otherBody.velocity.x) > Math.abs(otherBody.velocity.y)) {
+            newVx = -speed * 0.3;
+            newVy = speed * 0.85;
+          }
+          break;
+        case 3: // top-left to bottom-right: converts leftward/downward to rightward
+          if (Math.abs(otherBody.velocity.y) > Math.abs(otherBody.velocity.x) * 0.5) {
+            newVx = speed * 0.85;
+            newVy = speed * 0.2;
+          }
+          break;
       }
+
+      Body.setVelocity(otherBody, { x: newVx, y: newVy });
     });
   });
 
@@ -206,7 +218,7 @@ export function stopSimulation(sim: SimulationState) {
 
 export function applyBlockEffects(
   sim: SimulationState,
-  activeGroups: Set<number>,
+  activeTypes: Set<BlockType>,
   blocks: PlacedBlock[],
   ox: number,
   oy: number,
@@ -214,10 +226,8 @@ export function applyBlockEffects(
   let captured = false;
   const { engine, ballBody, pistonArms, removedBombs } = sim;
 
-  // Decrement portal cooldown
   if (sim.portalCooldown > 0) sim.portalCooldown--;
 
-  // Tick gravity pad effect
   if (sim.gravityEffect) {
     Body.applyForce(ballBody, ballBody.position, {
       x: sim.gravityEffect.dx,
@@ -229,7 +239,6 @@ export function applyBlockEffects(
     }
   }
 
-  // Decay shockwaves
   sim.shockwaves = sim.shockwaves.filter((s) => s.frame < 30);
   sim.shockwaves.forEach((s) => s.frame++);
 
@@ -239,7 +248,6 @@ export function applyBlockEffects(
     const bcy = oy + block.row * CELL_SIZE + CELL_SIZE / 2;
 
     switch (block.type) {
-      // --- PASSIVE BLOCKS ---
       case 'fan': {
         const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
         const [fdx, fdy] = dirs[block.rotation % 4];
@@ -247,7 +255,6 @@ export function applyBlockEffects(
         const dy = ballBody.position.y - bcy;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < FAN_RANGE && dist > 1) {
-          // Check if ball is in the fan's forward cone (180° wide)
           const dot = dx * fdx + dy * fdy;
           if (dot > 0) {
             const falloff = 1 - dist / FAN_RANGE;
@@ -275,9 +282,8 @@ export function applyBlockEffects(
         break;
       }
 
-      // --- POWERED BLOCKS (need active group) ---
       case 'piston': {
-        const active = activeGroups.has(block.group);
+        const active = activeTypes.has('piston');
         const hasArm = pistonArms.has(key);
         if (active && !hasArm) {
           const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
@@ -308,7 +314,7 @@ export function applyBlockEffects(
         break;
       }
       case 'blackhole': {
-        if (!activeGroups.has(block.group)) break;
+        if (!activeTypes.has('blackhole')) break;
         const dx = bcx - ballBody.position.x;
         const dy = bcy - ballBody.position.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
@@ -324,7 +330,7 @@ export function applyBlockEffects(
         break;
       }
       case 'whitehole': {
-        if (!activeGroups.has(block.group)) break;
+        if (!activeTypes.has('whitehole')) break;
         const dx = ballBody.position.x - bcx;
         const dy = ballBody.position.y - bcy;
         const dist = Math.sqrt(dx * dx + dy * dy);
@@ -338,16 +344,15 @@ export function applyBlockEffects(
         break;
       }
       case 'portal': {
-        // Portals are always active (don't need key). Group is used for pairing.
         if (sim.portalCooldown > 0) break;
         const dx = ballBody.position.x - bcx;
         const dy = ballBody.position.y - bcy;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < PORTAL_RADIUS) {
-          // Find paired portal with same group
-          const paired = blocks.find(
-            (b) => b.type === 'portal' && b.group === block.group && (b.col !== block.col || b.row !== block.row),
-          );
+          const allPortals = blocks.filter((b) => b.type === 'portal');
+          const myIndex = allPortals.findIndex((p) => p.col === block.col && p.row === block.row);
+          const pairedIndex = myIndex % 2 === 0 ? myIndex + 1 : myIndex - 1;
+          const paired = allPortals[pairedIndex];
           if (paired) {
             const targetX = ox + paired.col * CELL_SIZE + CELL_SIZE / 2;
             const targetY = oy + paired.row * CELL_SIZE + CELL_SIZE / 2;
@@ -358,7 +363,7 @@ export function applyBlockEffects(
         break;
       }
       case 'bomb': {
-        if (!activeGroups.has(block.group) || removedBombs.has(key)) break;
+        if (!activeTypes.has('bomb') || removedBombs.has(key)) break;
         const dx = ballBody.position.x - bcx;
         const dy = ballBody.position.y - bcy;
         const dist = Math.sqrt(dx * dx + dy * dy);

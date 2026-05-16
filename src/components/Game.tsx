@@ -10,7 +10,8 @@ import {
   STARTING_COINS,
   BLOCK_TYPES,
   BLOCK_CONFIGS,
-  GROUPED_TYPES,
+  POWERED_TYPES,
+  POWERED_KEY_MAP,
   VELOCITY_THRESHOLD,
   STILL_FRAMES_REQUIRED,
   CAMERA_LERP,
@@ -28,7 +29,7 @@ import {
   drawBuildAreaBorder,
   drawBall,
   drawDistanceHUD,
-  drawGroupHUD,
+  drawPoweredHUD,
   drawSimulationEffects,
   resetStarsCache,
 } from '@/game/renderer';
@@ -68,7 +69,7 @@ export default function Game() {
   const ballPlacedRef = useRef(false);
   const speedRef = useRef(1);
   const preRotationRef = useRef(0);
-  const activeGroupsRef = useRef<Set<number>>(new Set());
+  const activeTypesRef = useRef<Set<BlockType>>(new Set());
   const heldKeysRef = useRef<Set<string>>(new Set());
   const paintingRef = useRef(false);
   const lastPaintCellRef = useRef<string | null>(null);
@@ -198,7 +199,7 @@ export default function Game() {
       const { x: ox, y: oy } = runGridOffsetRef.current;
       const cam = cameraRef.current;
       const currentBlocks = blocksRef.current;
-      const activeGroups = activeGroupsRef.current;
+      const activeTypes = activeTypesRef.current;
       const zoom = currentZoomRef.current;
 
       drawSky(ctx, w, h, frameCount, cam.x, cam.y);
@@ -221,12 +222,11 @@ export default function Game() {
         .filter((b) => {
           if (b.type === 'ball') return false;
           if (b.type === 'bomb' && sim?.removedBombs.has(`${b.col},${b.row}`)) return false;
-          if (b.type === 'glass' && sim?.brokenGlass.has(`${b.col},${b.row}`)) return false;
           return true;
         })
-        .forEach((block) => drawPlacedBlock(ctx, block, ox, oy, cam.x, cam.y, frameCount, activeGroups));
+        .forEach((block) => drawPlacedBlock(ctx, block, ox, oy, cam.x, cam.y, frameCount, activeTypes));
 
-      drawSimulationEffects(ctx, currentBlocks, ox, oy, cam, activeGroups, frameCount, sim);
+      drawSimulationEffects(ctx, currentBlocks, ox, oy, cam, activeTypes, frameCount, sim);
 
       const trail = trailRef.current;
       if (sim) {
@@ -237,12 +237,12 @@ export default function Game() {
 
       drawDistanceHUD(ctx, w, maxDistanceRef.current);
 
-      const existingGroups = [...new Set(
+      const poweredTypesInUse = [...new Set(
         currentBlocks
-          .filter((b) => GROUPED_TYPES.includes(b.type))
-          .map((b) => b.group),
-      )].sort();
-      drawGroupHUD(ctx, existingGroups, activeGroups);
+          .filter((b) => POWERED_TYPES.includes(b.type))
+          .map((b) => b.type),
+      )] as BlockType[];
+      drawPoweredHUD(ctx, poweredTypesInUse, activeTypes);
     };
 
     const loop = () => {
@@ -279,7 +279,7 @@ export default function Game() {
             const { x: ox, y: oy } = runGridOffsetRef.current;
 
             const captured = applyBlockEffects(
-              sim, activeGroupsRef.current, blocksRef.current, ox, oy,
+              sim, activeTypesRef.current, blocksRef.current, ox, oy,
             );
 
             const distPx = ballBody.position.x - (ox + BUILD_WIDTH);
@@ -343,7 +343,7 @@ export default function Game() {
     maxDistanceRef.current = 0;
     cameraRef.current = { x: 0, y: 0 };
     trailRef.current = [];
-    activeGroupsRef.current = new Set();
+    activeTypesRef.current = new Set();
     heldKeysRef.current = new Set();
     setMode('running');
     setCurrentDistance(0);
@@ -356,7 +356,7 @@ export default function Game() {
       simRef.current = null;
     }
     cameraRef.current = { x: 0, y: 0 };
-    activeGroupsRef.current = new Set();
+    activeTypesRef.current = new Set();
     heldKeysRef.current = new Set();
     setMode('edit');
     setSpeed(1);
@@ -368,7 +368,7 @@ export default function Game() {
       simRef.current = null;
     }
     cameraRef.current = { x: 0, y: 0 };
-    activeGroupsRef.current = new Set();
+    activeTypesRef.current = new Set();
     heldKeysRef.current = new Set();
     setBlocks([]);
     setCoins(STARTING_COINS);
@@ -470,13 +470,11 @@ export default function Game() {
         if (cost > coinsRef.current) return prev;
 
         setCoins((c) => c - cost);
-        const isPowered = GROUPED_TYPES.includes(selBlock);
         return [...prev, {
           type: selBlock,
           col: cell.col,
           row: cell.row,
           rotation: preRotationRef.current,
-          group: isPowered ? 1 : 0,
         }];
       });
     },
@@ -543,26 +541,6 @@ export default function Game() {
     [getGridCell, placeBlockAt],
   );
 
-  const handleCanvasWheel = useCallback(
-    (e: React.WheelEvent<HTMLCanvasElement>) => {
-      if (modeRef.current !== 'edit') return;
-      const cell = getGridCell(e.clientX, e.clientY);
-      if (!cell) return;
-
-      setBlocks((prev) =>
-        prev.map((b) => {
-          if (b.col !== cell.col || b.row !== cell.row) return b;
-          if (!GROUPED_TYPES.includes(b.type)) return b;
-          const delta = e.deltaY > 0 ? 1 : -1;
-          let newGroup = b.group + delta;
-          if (newGroup < 1) newGroup = 9;
-          if (newGroup > 9) newGroup = 1;
-          return { ...b, group: newGroup };
-        }),
-      );
-    },
-    [getGridCell],
-  );
 
   // Keyboard
   useEffect(() => {
@@ -621,22 +599,22 @@ export default function Game() {
           return;
         }
 
-        const num = parseInt(e.key);
-        if (num >= 1 && num <= 9 && !heldKeysRef.current.has(e.key)) {
+        const poweredType = POWERED_KEY_MAP[e.key];
+        if (poweredType && !heldKeysRef.current.has(e.key)) {
           heldKeysRef.current.add(e.key);
-          activeGroupsRef.current = new Set([...activeGroupsRef.current, num]);
+          activeTypesRef.current = new Set([...activeTypesRef.current, poweredType]);
         }
       }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       if (modeRef.current !== 'running') return;
-      const num = parseInt(e.key);
-      if (num >= 1 && num <= 9) {
+      const poweredType = POWERED_KEY_MAP[e.key];
+      if (poweredType) {
         heldKeysRef.current.delete(e.key);
-        const next = new Set(activeGroupsRef.current);
-        next.delete(num);
-        activeGroupsRef.current = next;
+        const next = new Set(activeTypesRef.current);
+        next.delete(poweredType);
+        activeTypesRef.current = next;
       }
     };
 
@@ -657,7 +635,7 @@ export default function Game() {
     const cost = getBlockCost(type, blocks);
     const canAfford = type === 'ball' ? !ballPlaced : coins >= cost;
     const disabled = mode !== 'edit' || (type === 'ball' && ballPlaced) || (!canAfford && count > 0);
-    const isPowered = GROUPED_TYPES.includes(type);
+    const isPowered = POWERED_TYPES.includes(type);
 
     return (
       <button
@@ -759,9 +737,8 @@ export default function Game() {
             <div className="text-[9px] text-gray-500 uppercase tracking-wider font-semibold mb-1">Controls</div>
             <div>Click / drag: Place blocks</div>
             <div>Right-click: Rotate</div>
-            <div>Scroll: Change group</div>
             <div>Del: Remove</div>
-            <div className="text-gray-700 mt-1">Sim: 1-9 groups · Space speed · R stop</div>
+            <div className="text-gray-700 mt-1">Sim: Hold 1-5 for powered · Space speed · R stop</div>
           </div>
         </div>
       </div>
@@ -769,13 +746,13 @@ export default function Game() {
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Toolbar */}
-        <div className="h-14 bg-gradient-to-r from-[#16213e] to-[#141d33] border-b border-[#1a3a6e]/40 flex items-center px-5 gap-4">
+        <div className="h-[72px] bg-gradient-to-r from-[#16213e] to-[#141d33] border-b border-[#1a3a6e]/40 flex items-center px-6 gap-5">
           {mode === 'edit' && (
             <>
               <button
                 onClick={handleRun}
                 disabled={!ballPlaced}
-                className={`px-7 py-2.5 rounded-xl font-bold text-sm tracking-wide transition-all ${
+                className={`px-10 py-3.5 rounded-xl font-bold text-base tracking-wide transition-all ${
                   ballPlaced
                     ? 'bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_12px_rgba(16,185,129,0.3)] cursor-pointer'
                     : 'bg-gray-700/50 text-gray-500 cursor-not-allowed'
@@ -785,7 +762,7 @@ export default function Game() {
               </button>
               <button
                 onClick={handleReset}
-                className="px-6 py-2.5 rounded-xl font-semibold text-sm bg-[#e94560]/80 text-white hover:bg-[#e94560] transition-all cursor-pointer"
+                className="px-8 py-3.5 rounded-xl font-semibold text-base bg-[#e94560]/80 text-white hover:bg-[#e94560] transition-all cursor-pointer"
               >
                 ↺ Clear
               </button>
@@ -807,23 +784,23 @@ export default function Game() {
               </div>
               <button
                 onClick={handleSpeedToggle}
-                className="px-5 py-2 rounded-xl text-xs font-bold bg-white/5 text-yellow-400 hover:bg-white/10 cursor-pointer border border-yellow-400/20 transition-all"
+                className="px-7 py-3 rounded-xl text-sm font-bold bg-white/5 text-yellow-400 hover:bg-white/10 cursor-pointer border border-yellow-400/20 transition-all"
               >
                 {speed}x
               </button>
               <button
                 onClick={handleBackToEdit}
-                className="px-5 py-2 rounded-xl text-xs font-semibold bg-white/5 text-gray-400 hover:bg-white/10 cursor-pointer border border-white/10 transition-all"
+                className="px-8 py-3 rounded-xl text-sm font-semibold bg-white/5 text-gray-400 hover:bg-white/10 cursor-pointer border border-white/10 transition-all"
               >
                 Stop
               </button>
-              <span className="text-[10px] text-gray-600 ml-1">Hold 1-9 for groups</span>
+              <span className="text-[10px] text-gray-600 ml-1">Hold 1-5 for powered blocks</span>
             </>
           )}
           {mode === 'results' && (
             <button
               onClick={handleBackToEdit}
-              className="px-7 py-2.5 rounded-xl font-bold text-sm bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_12px_rgba(16,185,129,0.3)] cursor-pointer transition-all"
+              className="px-10 py-3.5 rounded-xl font-bold text-base bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_12px_rgba(16,185,129,0.3)] cursor-pointer transition-all"
             >
               ← Edit
             </button>
@@ -844,7 +821,6 @@ export default function Game() {
             onContextMenu={handleCanvasRightClick}
             onMouseMove={handleCanvasMouseMove}
             onMouseLeave={() => { setHoverCell(null); paintingRef.current = false; lastPaintCellRef.current = null; }}
-            onWheel={handleCanvasWheel}
             className="block w-full h-full"
           />
 
@@ -866,7 +842,7 @@ export default function Game() {
                 )}
                 <button
                   onClick={handleBackToEdit}
-                  className="px-10 py-3 rounded-xl font-bold bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_16px_rgba(16,185,129,0.3)] cursor-pointer text-base transition-all"
+                  className="px-14 py-4 rounded-xl font-bold bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_16px_rgba(16,185,129,0.3)] cursor-pointer text-lg transition-all"
                 >
                   ← Edit
                 </button>
@@ -908,7 +884,7 @@ export default function Game() {
 
                 <button
                   onClick={() => setShowIntro(false)}
-                  className="px-12 py-3.5 rounded-xl font-bold bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_20px_rgba(16,185,129,0.3)] cursor-pointer text-lg tracking-wide transition-all"
+                  className="px-16 py-5 rounded-2xl font-bold bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_20px_rgba(16,185,129,0.3)] cursor-pointer text-xl tracking-wide transition-all"
                 >
                   Play
                 </button>

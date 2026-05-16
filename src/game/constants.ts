@@ -9,7 +9,7 @@ export const STARTING_COINS = 250;
 
 export const BLOCK_TYPES = [
   'ball', 'solid', 'ramp', 'curve', 'ice', 'bouncy',
-  'sticky', 'glass', 'fan', 'gravitypad',
+  'fan', 'gravitypad',
   'piston', 'blackhole', 'whitehole', 'portal', 'bomb',
 ] as const;
 export type BlockType = (typeof BLOCK_TYPES)[number];
@@ -74,26 +74,8 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     cost: 5,
     color: '#e74c3c',
     secondaryColor: '#f39c12',
-    description: 'Energy boost · 5🪙',
+    description: 'Super bounce · 5🪙',
     hotkey: '5',
-    category: 'passive',
-  },
-  sticky: {
-    name: 'Sticky',
-    cost: 1,
-    color: '#795548',
-    secondaryColor: '#a1887f',
-    description: 'Dead stop · 1🪙',
-    hotkey: '6',
-    category: 'passive',
-  },
-  glass: {
-    name: 'Glass',
-    cost: 1,
-    color: '#b3e5fc',
-    secondaryColor: '#e1f5fe',
-    description: 'Breaks on hit · 1🪙',
-    hotkey: '7',
     category: 'passive',
   },
   fan: {
@@ -101,8 +83,8 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     cost: 3,
     color: '#26c6da',
     secondaryColor: '#80deea',
-    description: 'Wind push · 3🪙',
-    hotkey: '8',
+    description: 'Strong wind · 3🪙',
+    hotkey: '6',
     category: 'passive',
   },
   gravitypad: {
@@ -111,7 +93,7 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     color: '#ff4081',
     secondaryColor: '#f50057',
     description: 'Redirect gravity · 6🪙',
-    hotkey: '9',
+    hotkey: '7',
     category: 'passive',
   },
   piston: {
@@ -162,28 +144,42 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
 };
 
 export const POWERED_TYPES: BlockType[] = ['piston', 'blackhole', 'whitehole', 'portal', 'bomb'];
-export const GROUPED_TYPES: BlockType[] = ['piston', 'blackhole', 'whitehole', 'portal', 'bomb'];
+
+export const POWERED_KEY_MAP: Record<string, BlockType> = {
+  '1': 'piston',
+  '2': 'blackhole',
+  '3': 'whitehole',
+  '4': 'portal',
+  '5': 'bomb',
+};
+
+export const POWERED_TYPE_KEY: Record<string, string> = {
+  piston: '1',
+  blackhole: '2',
+  whitehole: '3',
+  portal: '4',
+  bomb: '5',
+};
 
 export const BALL_RADIUS = CELL_SIZE * 0.35;
-export const BALL_RESTITUTION = 0.3;
-export const BALL_FRICTION = 0.08;
-export const BALL_DENSITY = 0.008;
+export const BALL_RESTITUTION = 0.7;
+export const BALL_FRICTION = 0.05;
+export const BALL_DENSITY = 0.004;
 
-export const BOUNCY_RESTITUTION = 1.5;
+export const BOUNCY_RESTITUTION = 2.0;
 export const ICE_FRICTION = 0.001;
-export const CURVE_FRICTION = 0.15;
-export const STICKY_FRICTION = 0.95;
-export const STICKY_RESTITUTION = 0.05;
+export const CURVE_FRICTION = 0.02;
+export const CURVE_RESTITUTION = 0.05;
 
-export const GRAVITY_WELL_RADIUS = CELL_SIZE * 5;
-export const GRAVITY_WELL_STRENGTH = 0.0005;
+export const GRAVITY_WELL_RADIUS = CELL_SIZE * 6;
+export const GRAVITY_WELL_STRENGTH = 0.001;
 export const BLACKHOLE_CAPTURE_RADIUS = CELL_SIZE * 0.5;
 
-export const PISTON_FORCE = 0.015;
-export const BOMB_FORCE = 0.04;
+export const PISTON_FORCE = 0.035;
+export const BOMB_FORCE = 0.08;
 
-export const FAN_FORCE = 0.0004;
-export const FAN_RANGE = CELL_SIZE * 4;
+export const FAN_FORCE = 0.0008;
+export const FAN_RANGE = CELL_SIZE * 6;
 
 export const GRAVITY_PAD_STRENGTH = 0.003;
 export const GRAVITY_PAD_DURATION = 180; // 3 seconds at 60fps

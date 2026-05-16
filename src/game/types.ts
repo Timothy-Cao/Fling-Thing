@@ -5,7 +5,6 @@ export interface PlacedBlock {
   col: number;
   row: number;
   rotation: number; // 0, 1, 2, 3 = 0°, 90°, 180°, 270°
-  group: number; // 1-9, only meaningful for powered blocks
 }
 
 export type GameMode = 'edit' | 'running' | 'results';
