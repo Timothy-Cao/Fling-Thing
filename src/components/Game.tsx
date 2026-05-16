@@ -643,7 +643,10 @@ export default function Game() {
     <div className="flex h-screen w-screen overflow-hidden">
       {/* Sidebar */}
       <div className="w-[260px] flex-shrink-0 bg-[#16213e] border-r-2 border-[#0f3460] flex flex-col p-4 gap-2 overflow-y-auto">
-        <h2 className="text-base font-bold text-[#e94560] uppercase tracking-widest mb-1">Fling Thing</h2>
+        <div className="text-center mb-1">
+          <h2 className="text-lg font-extrabold text-[#e94560] uppercase tracking-[0.2em] leading-none">Fling Thing</h2>
+          <div className="text-[9px] text-gray-500 tracking-[0.3em] uppercase mt-0.5">a Tim Cao game</div>
+        </div>
         <div className="bg-[#0f3460] rounded-lg py-2 px-4 text-center mb-1">
           <span className="text-lg font-bold text-yellow-400">🪙 {coins} Gold</span>
         </div>
