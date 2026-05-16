@@ -538,15 +538,21 @@ export default function Game() {
         }
       }
 
+      if (modeRef.current === 'running' || modeRef.current === 'results') {
+        if (e.key === 'r' || e.key === 'Escape') {
+          e.preventDefault();
+          handleBackToEdit();
+          return;
+        }
+      }
+
       if (modeRef.current === 'running') {
-        // Speed toggle
         if (e.key === ' ' || e.key === 'f') {
           e.preventDefault();
           handleSpeedToggle();
           return;
         }
 
-        // Group activation (1-9)
         const num = parseInt(e.key);
         if (num >= 1 && num <= 9 && !heldKeysRef.current.has(e.key)) {
           heldKeysRef.current.add(e.key);
@@ -572,7 +578,7 @@ export default function Game() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [handleSpeedToggle]);
+  }, [handleSpeedToggle, handleBackToEdit]);
 
   // --- SIDEBAR ---
 
