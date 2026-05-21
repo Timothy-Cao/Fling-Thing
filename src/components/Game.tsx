@@ -37,6 +37,8 @@ import {
   startSimulation,
   stopSimulation as stopSim,
   applyBlockEffects,
+  stepSimulation,
+  setSimulationSpeed,
   SimulationState,
 } from '@/game/physics';
 
@@ -73,6 +75,7 @@ export default function Game() {
   const heldKeysRef = useRef<Set<string>>(new Set());
   const paintingRef = useRef(false);
   const lastPaintCellRef = useRef<string | null>(null);
+  const eraserRef = useRef(false);
 
   const [blocks, setBlocks] = useState<PlacedBlock[]>(() => {
     if (typeof window === 'undefined') return [];
@@ -92,6 +95,7 @@ export default function Game() {
   const [hoverCell, setHoverCell] = useState<{ col: number; row: number } | null>(null);
   const [speed, setSpeed] = useState(1);
   const [preRotation, setPreRotation] = useState(0);
+  const [eraserMode, setEraserMode] = useState(false);
   const [showIntro, setShowIntro] = useState(() => {
     if (typeof window === 'undefined') return true;
     return !localStorage.getItem('fling-blocks');
@@ -107,6 +111,7 @@ export default function Game() {
   useEffect(() => { bestDistanceRef.current = bestDistance; localStorage.setItem('fling-best', String(bestDistance)); }, [bestDistance]);
   useEffect(() => { speedRef.current = speed; }, [speed]);
   useEffect(() => { preRotationRef.current = preRotation; }, [preRotation]);
+  useEffect(() => { eraserRef.current = eraserMode; }, [eraserMode]);
 
   // --- RENDER LOOP ---
 
@@ -177,7 +182,21 @@ export default function Game() {
 
       currentBlocks.forEach((block) => drawPlacedBlock(ctx, block, ox, oy, 0, 0, frameCount));
 
-      if (hover && selBlock) {
+      if (hover && eraserRef.current) {
+        const hx = ox + hover.col * CELL_SIZE;
+        const hy = oy + hover.row * CELL_SIZE;
+        const hasBlock = currentBlocks.some((b) => b.col === hover.col && b.row === hover.row);
+        ctx.fillStyle = hasBlock ? 'rgba(255, 60, 60, 0.25)' : 'rgba(255, 60, 60, 0.1)';
+        ctx.fillRect(hx, hy, CELL_SIZE, CELL_SIZE);
+        ctx.strokeStyle = 'rgba(255, 60, 60, 0.6)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(hx + 8, hy + 8);
+        ctx.lineTo(hx + CELL_SIZE - 8, hy + CELL_SIZE - 8);
+        ctx.moveTo(hx + CELL_SIZE - 8, hy + 8);
+        ctx.lineTo(hx + 8, hy + CELL_SIZE - 8);
+        ctx.stroke();
+      } else if (hover && selBlock) {
         const hx = ox + hover.col * CELL_SIZE;
         const hy = oy + hover.row * CELL_SIZE;
         const occupied = currentBlocks.some((b) => b.col === hover.col && b.row === hover.row);
@@ -277,6 +296,9 @@ export default function Game() {
             if (trailRef.current.length > 40) trailRef.current.shift();
 
             const { x: ox, y: oy } = runGridOffsetRef.current;
+
+            // Manual physics step with substeps + speed clamp (anti-tunneling)
+            stepSimulation(sim);
 
             const captured = applyBlockEffects(
               sim, activeTypesRef.current, blocksRef.current, ox, oy,
@@ -383,41 +405,74 @@ export default function Game() {
     setSpeed((s) => {
       const next = s === 1 ? 2 : s === 2 ? 4 : 1;
       if (simRef.current) {
-        simRef.current.engine.timing.timeScale = next;
+        setSimulationSpeed(simRef.current, next);
       }
       return next;
     });
   }, []);
 
+  const [shareModal, setShareModal] = useState<null | 'export' | 'import'>(null);
+  const [importText, setImportText] = useState('');
+  const [importError, setImportError] = useState('');
+
+  const exportedCode = (() => {
+    if (shareModal !== 'export') return '';
+    try {
+      const payload = { v: 2, b: blocks, c: coins };
+      const json = JSON.stringify(payload);
+      const bytes = new TextEncoder().encode(json);
+      let bin = '';
+      bytes.forEach((b) => { bin += String.fromCharCode(b); });
+      return 'FT2|' + btoa(bin).replace(/=+$/, '');
+    } catch { return ''; }
+  })();
+
   const handleExport = useCallback(() => {
-    const data = JSON.stringify({ blocks: blocksRef.current, coins: coinsRef.current }, null, 2);
-    const blob = new Blob([data], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'fling-thing-build.json';
-    a.click();
-    URL.revokeObjectURL(url);
+    setShareModal('export');
   }, []);
 
   const handleImport = useCallback(() => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.onchange = (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        try {
-          const data = JSON.parse(ev.target?.result as string);
-          if (data.blocks) setBlocks(data.blocks);
-          if (data.coins != null) setCoins(data.coins);
-        } catch { /* ignore bad files */ }
-      };
-      reader.readAsText(file);
-    };
-    input.click();
+    setImportText('');
+    setImportError('');
+    setShareModal('import');
+  }, []);
+
+  const applyImport = useCallback((raw: string) => {
+    const code = raw.trim();
+    if (!code) { setImportError('Paste a code first.'); return; }
+    try {
+      // accept FT2|<base64> or raw JSON
+      let json: string;
+      if (code.startsWith('FT2|')) {
+        const b64 = code.slice(4) + '='.repeat((4 - (code.length - 4) % 4) % 4);
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        json = new TextDecoder().decode(bytes);
+      } else {
+        json = code;
+      }
+      const data = JSON.parse(json);
+      const incoming = data.b ?? data.blocks;
+      if (!Array.isArray(incoming)) throw new Error('no blocks');
+      // sanitize
+      const validTypes = BLOCK_TYPES as readonly string[];
+      const cleaned: PlacedBlock[] = incoming
+        .filter((b: { col: unknown; row: unknown }) =>
+          b && typeof b.col === 'number' && typeof b.row === 'number')
+        .map((b: { type: string; col: number; row: number; rotation: number }) => ({
+          type: (validTypes.includes(b.type) ? b.type : 'solid') as BlockType,
+          col: b.col,
+          row: b.row,
+          rotation: (((b.rotation | 0) % 4) + 4) % 4,
+        }));
+      setBlocks(cleaned);
+      const incomingCoins = data.c ?? data.coins;
+      if (typeof incomingCoins === 'number') setCoins(incomingCoins);
+      setShareModal(null);
+    } catch {
+      setImportError('Invalid share code.');
+    }
   }, []);
 
   // --- CANVAS EVENTS ---
@@ -481,6 +536,25 @@ export default function Game() {
     [],
   );
 
+  const eraseBlockAt = useCallback(
+    (cell: { col: number; row: number }) => {
+      setBlocks((prev) => {
+        const idx = prev.findIndex((b) => b.col === cell.col && b.row === cell.row);
+        if (idx < 0) return prev;
+        const existing = prev[idx];
+        const remaining = prev.filter((_, i) => i !== idx);
+        if (existing.type !== 'ball') {
+          const othersOfType = remaining.filter((b) => b.type === existing.type);
+          if (othersOfType.length >= 1) {
+            setCoins((c) => c + BLOCK_CONFIGS[existing.type].cost);
+          }
+        }
+        return remaining;
+      });
+    },
+    [],
+  );
+
   const handleCanvasMouseDown = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       if (e.button !== 0 || modeRef.current !== 'edit') return;
@@ -488,9 +562,13 @@ export default function Game() {
       const cell = getGridCell(e.clientX, e.clientY);
       if (!cell) return;
       lastPaintCellRef.current = `${cell.col},${cell.row}`;
-      placeBlockAt(cell, true);
+      if (eraserRef.current) {
+        eraseBlockAt(cell);
+      } else {
+        placeBlockAt(cell, true);
+      }
     },
-    [getGridCell, placeBlockAt],
+    [getGridCell, placeBlockAt, eraseBlockAt],
   );
 
   const handleCanvasMouseUp = useCallback(() => {
@@ -530,15 +608,19 @@ export default function Game() {
       const cell = getGridCell(e.clientX, e.clientY);
       setHoverCell(cell);
 
-      if (paintingRef.current && cell && selectedBlockRef.current) {
+      if (paintingRef.current && cell) {
         const key = `${cell.col},${cell.row}`;
         if (key !== lastPaintCellRef.current) {
           lastPaintCellRef.current = key;
-          placeBlockAt(cell, false);
+          if (eraserRef.current) {
+            eraseBlockAt(cell);
+          } else if (selectedBlockRef.current) {
+            placeBlockAt(cell, false);
+          }
         }
       }
     },
-    [getGridCell, placeBlockAt],
+    [getGridCell, placeBlockAt, eraseBlockAt],
   );
 
 
@@ -546,9 +628,18 @@ export default function Game() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (modeRef.current === 'edit') {
+        if (e.key === 'e' || e.key === 'E') {
+          setEraserMode((prev) => {
+            if (!prev) setSelectedBlock(null);
+            return !prev;
+          });
+          return;
+        }
+
         const blockIndex = BLOCK_TYPES.findIndex((t) => BLOCK_CONFIGS[t].hotkey === e.key);
         if (blockIndex >= 0) {
           const type = BLOCK_TYPES[blockIndex];
+          setEraserMode(false);
           setSelectedBlock((prev) => {
             if (prev !== type) {
               setPreRotation(0);
@@ -579,6 +670,7 @@ export default function Game() {
 
         if (e.key === 'Escape') {
           setSelectedBlock(null);
+          setEraserMode(false);
           setPreRotation(0);
           return;
         }
@@ -640,10 +732,10 @@ export default function Game() {
     return (
       <button
         key={type}
-        onClick={() => !disabled && setSelectedBlock((prev) => {
+        onClick={() => { if (disabled) return; setEraserMode(false); setSelectedBlock((prev) => {
           if (prev !== type) setPreRotation(0);
           return prev === type ? null : type;
-        })}
+        }); }}
         className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl border-2 transition-all text-left ${
           isSelected
             ? 'border-[#e94560] bg-[#1a3a6e] shadow-[0_0_12px_rgba(233,69,96,0.25)]'
@@ -737,7 +829,8 @@ export default function Game() {
             <div className="text-[9px] text-gray-500 uppercase tracking-wider font-semibold mb-1">Controls</div>
             <div>Click / drag: Place blocks</div>
             <div>Right-click: Rotate</div>
-            <div>Del: Remove</div>
+            <div>E: Eraser (drag to delete)</div>
+            <div>Del: Remove single</div>
             <div className="text-gray-700 mt-1">Sim: Hold 1-5 for powered · Space speed · R stop</div>
           </div>
         </div>
@@ -766,12 +859,17 @@ export default function Game() {
               >
                 ↺ Clear
               </button>
+              {eraserMode && (
+                <span className="text-sm text-red-400 bg-red-400/10 px-4 py-2 rounded-lg border border-red-400/30 font-semibold">
+                  Eraser (E)
+                </span>
+              )}
               {selectedBlock && preRotation > 0 && (
                 <span className="text-xs text-gray-400 bg-white/5 px-3 py-1.5 rounded-lg">
                   {preRotation * 90}°
                 </span>
               )}
-              {!ballPlaced && (
+              {!ballPlaced && !eraserMode && (
                 <span className="text-xs text-gray-500/80 ml-2">Place the ball to run</span>
               )}
             </>
@@ -847,6 +945,68 @@ export default function Game() {
                   ← Edit
                 </button>
                 <div className="text-[10px] text-gray-600 mt-4">Press R or Esc</div>
+              </div>
+            </div>
+          )}
+
+          {/* Share modal */}
+          {shareModal && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-md z-20">
+              <div className="bg-gradient-to-b from-[#16213e] to-[#111d35] border border-[#1a3a6e]/50 rounded-2xl p-7 shadow-[0_20px_60px_rgba(0,0,0,0.5)] w-[480px] max-w-[90vw]">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-lg font-bold text-white tracking-wide">
+                    {shareModal === 'export' ? 'Share your build' : 'Load a build'}
+                  </h3>
+                  <button
+                    onClick={() => setShareModal(null)}
+                    className="text-gray-400 hover:text-white text-xl leading-none w-6 h-6 flex items-center justify-center"
+                  >×</button>
+                </div>
+
+                {shareModal === 'export' ? (
+                  <>
+                    <p className="text-xs text-gray-400 mb-2">Copy this code and send it to anyone.</p>
+                    <textarea
+                      readOnly
+                      value={exportedCode}
+                      onFocus={(e) => e.currentTarget.select()}
+                      className="w-full h-32 bg-black/30 border border-white/10 rounded-lg p-3 text-[11px] font-mono text-emerald-300 resize-none break-all"
+                    />
+                    <div className="flex gap-2 mt-3">
+                      <button
+                        onClick={async () => {
+                          try { await navigator.clipboard.writeText(exportedCode); } catch {}
+                        }}
+                        className="flex-1 px-4 py-2.5 rounded-lg font-semibold bg-emerald-600 text-white hover:bg-emerald-500 cursor-pointer text-sm"
+                      >Copy to clipboard</button>
+                      <button
+                        onClick={() => setShareModal(null)}
+                        className="px-4 py-2.5 rounded-lg font-semibold bg-white/5 text-gray-300 hover:bg-white/10 cursor-pointer text-sm"
+                      >Done</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs text-gray-400 mb-2">Paste a share code below. This will replace your current build.</p>
+                    <textarea
+                      value={importText}
+                      onChange={(e) => { setImportText(e.target.value); setImportError(''); }}
+                      placeholder="FT2|..."
+                      className="w-full h-32 bg-black/30 border border-white/10 rounded-lg p-3 text-[11px] font-mono text-cyan-300 resize-none break-all"
+                    />
+                    {importError && <p className="text-red-400 text-xs mt-2">{importError}</p>}
+                    <div className="flex gap-2 mt-3">
+                      <button
+                        onClick={() => applyImport(importText)}
+                        className="flex-1 px-4 py-2.5 rounded-lg font-semibold bg-cyan-600 text-white hover:bg-cyan-500 cursor-pointer text-sm"
+                      >Load build</button>
+                      <button
+                        onClick={() => setShareModal(null)}
+                        className="px-4 py-2.5 rounded-lg font-semibold bg-white/5 text-gray-300 hover:bg-white/10 cursor-pointer text-sm"
+                      >Cancel</button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}

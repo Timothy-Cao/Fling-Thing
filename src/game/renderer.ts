@@ -10,7 +10,7 @@ import {
   POWERED_TYPES,
   POWERED_TYPE_KEY,
   FAN_RANGE,
-  GRAVITY_WELL_RADIUS,
+  WHITEHOLE_RANGE,
   BlockType,
 } from './constants';
 import { PlacedBlock, Camera } from './types';
@@ -299,6 +299,34 @@ export function drawBlockShape(
       ctx.lineTo(cx - gdy * 8, cy - gdx * 8);
       ctx.closePath();
       ctx.fill();
+      break;
+    }
+    case 'booster': {
+      const grad = ctx.createLinearGradient(x, y, x + CELL_SIZE, y + CELL_SIZE);
+      grad.addColorStop(0, 'rgba(255, 235, 59, 0.85)');
+      grad.addColorStop(1, 'rgba(255, 152, 0, 0.7)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+      ctx.strokeStyle = '#fff59d';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+      const bDirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+      const [bdx, bdy] = bDirs[rotation % 4];
+      ctx.strokeStyle = 'rgba(40, 20, 0, 0.85)';
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      for (let i = -1; i <= 1; i++) {
+        const off = i * 7;
+        const sx = cx - bdx * 6 + bdy * off;
+        const sy = cy - bdy * 6 + bdx * off;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx + bdx * 7 - bdy * 5, sy + bdy * 7 - bdx * 5);
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx + bdx * 7 + bdy * 5, sy + bdy * 7 + bdx * 5);
+        ctx.stroke();
+      }
+      ctx.lineCap = 'butt';
       break;
     }
     case 'piston': {
@@ -849,15 +877,51 @@ export function drawSimulationEffects(
       }
       case 'whitehole': {
         if (!activeTypes.has('whitehole')) break;
-        const pulseR = (frameCount % 25) / 25 * GRAVITY_WELL_RADIUS * 0.3;
+        const wDirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+        const [wdx, wdy] = wDirs[block.rotation % 4];
         ctx.save();
-        ctx.globalAlpha = 0.2 * (1 - (frameCount % 25) / 25);
-        ctx.strokeStyle = '#f1c40f';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(bx, by, pulseR, 0, Math.PI * 2);
-        ctx.stroke();
+        // jet streaks
+        ctx.globalAlpha = 0.5;
+        for (let i = 0; i < 8; i++) {
+          const t = ((frameCount * 6 + i * 30) % WHITEHOLE_RANGE);
+          const spread = ((i % 5) - 2) * 5;
+          const sx = bx + wdy * spread + wdx * (10 + t);
+          const sy = by + wdx * spread + wdy * (10 + t);
+          ctx.fillStyle = `rgba(255, 240, 120, ${0.9 - t / WHITEHOLE_RANGE})`;
+          ctx.beginPath();
+          ctx.arc(sx, sy, 2.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
         ctx.restore();
+        break;
+      }
+      case 'booster': {
+        const flash = sim?.boostFlashes?.find(
+          (f) => Math.abs(f.x - (ox + block.col * CELL_SIZE + CELL_SIZE / 2)) < 1
+              && Math.abs(f.y - (oy + block.row * CELL_SIZE + CELL_SIZE / 2)) < 1,
+        );
+        if (flash) {
+          const bDirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+          const [bdx, bdy] = bDirs[block.rotation % 4];
+          const p = flash.frame / 18;
+          ctx.save();
+          ctx.globalAlpha = 0.7 * (1 - p);
+          const len = CELL_SIZE * 3 * p;
+          const grad = ctx.createLinearGradient(
+            bx, by, bx + bdx * len, by + bdy * len,
+          );
+          grad.addColorStop(0, 'rgba(255, 235, 59, 0.8)');
+          grad.addColorStop(1, 'rgba(255, 152, 0, 0)');
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.moveTo(bx + bdy * 8, by + bdx * 8);
+          ctx.lineTo(bx - bdy * 8, by - bdx * 8);
+          ctx.lineTo(bx + bdx * len - bdy * 2, by + bdy * len - bdx * 2);
+          ctx.lineTo(bx + bdx * len + bdy * 2, by + bdy * len + bdx * 2);
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+        }
         break;
       }
     }
