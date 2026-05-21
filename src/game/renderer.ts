@@ -11,6 +11,7 @@ import {
   POWERED_TYPE_KEY,
   FAN_RANGE,
   WHITEHOLE_RANGE,
+  OFFSCREEN_EDGE_PAD,
   BlockType,
 } from './constants';
 import { PlacedBlock, Camera } from './types';
@@ -34,7 +35,7 @@ function getStars(w: number, h: number) {
   return starsCache;
 }
 
-function getMountains(_w: number) {
+function getMountains() {
   if (mountainsCache) return mountainsCache;
   mountainsCache = [];
   const layers = [
@@ -521,7 +522,7 @@ export function drawSky(
 
   // Mountains
   const horizon = h * 0.65;
-  const mountains = getMountains(w);
+  const mountains = getMountains();
   for (const layer of mountains) {
     const offsetX = camX * layer.parallax;
     const step = (w * 2) / (layer.peaks.length - 2);
@@ -678,11 +679,18 @@ export function drawBall(
   angle: number,
   trail: { x: number; y: number }[],
   cam: Camera,
+  speedNorm = 0,            // 0..1 — drives trail color heat
 ) {
+  // Trail with heat tint: cool red at low speed -> orange/yellow at high speed
+  const heat = Math.max(0, Math.min(1, speedNorm));
+  const r = Math.round(233 + (255 - 233) * heat);
+  const g = Math.round(69 + (200 - 69) * heat);
+  const b = Math.round(96 + (60 - 96) * heat);
   for (let i = 0; i < trail.length; i++) {
-    const alpha = (i / trail.length) * 0.35;
-    const size = BALL_RADIUS * (0.25 + (i / trail.length) * 0.75);
-    ctx.fillStyle = `rgba(233, 69, 96, ${alpha})`;
+    const t = i / trail.length;
+    const alpha = t * (0.35 + heat * 0.3);
+    const size = BALL_RADIUS * (0.2 + t * 0.85);
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
     ctx.beginPath();
     ctx.arc(trail[i].x - cam.x, trail[i].y - cam.y, size, 0, Math.PI * 2);
     ctx.fill();
@@ -1014,21 +1022,40 @@ export function drawSimulationEffects(
           const [bdx, bdy] = bDirs[block.rotation % 4];
           const p = flash.frame / 18;
           ctx.save();
-          ctx.globalAlpha = 0.7 * (1 - p);
-          const len = CELL_SIZE * 3 * p;
-          const grad = ctx.createLinearGradient(
-            bx, by, bx + bdx * len, by + bdy * len,
-          );
-          grad.addColorStop(0, 'rgba(255, 235, 59, 0.8)');
-          grad.addColorStop(1, 'rgba(255, 152, 0, 0)');
+          // bigger jet cone
+          ctx.globalAlpha = 0.85 * (1 - p);
+          const len = CELL_SIZE * 4.5 * Math.sqrt(p);
+          const grad = ctx.createLinearGradient(bx, by, bx + bdx * len, by + bdy * len);
+          grad.addColorStop(0, 'rgba(255, 235, 59, 0.95)');
+          grad.addColorStop(0.4, 'rgba(255, 152, 0, 0.55)');
+          grad.addColorStop(1, 'rgba(255, 80, 0, 0)');
           ctx.fillStyle = grad;
           ctx.beginPath();
-          ctx.moveTo(bx + bdy * 8, by + bdx * 8);
-          ctx.lineTo(bx - bdy * 8, by - bdx * 8);
-          ctx.lineTo(bx + bdx * len - bdy * 2, by + bdy * len - bdx * 2);
-          ctx.lineTo(bx + bdx * len + bdy * 2, by + bdy * len + bdx * 2);
+          ctx.moveTo(bx + bdy * 12, by + bdx * 12);
+          ctx.lineTo(bx - bdy * 12, by - bdx * 12);
+          ctx.lineTo(bx + bdx * len - bdy * 4, by + bdy * len - bdx * 4);
+          ctx.lineTo(bx + bdx * len + bdy * 4, by + bdy * len + bdx * 4);
           ctx.closePath();
           ctx.fill();
+          // sparks
+          ctx.globalAlpha = 1 - p;
+          for (let i = 0; i < 6; i++) {
+            const t = ((flash.frame + i * 3) % 18) / 18;
+            const off = (i - 2.5) * 4;
+            const sx2 = bx + bdy * off + bdx * (10 + t * len * 0.8);
+            const sy2 = by + bdx * off + bdy * (10 + t * len * 0.8);
+            ctx.fillStyle = `rgba(255, ${200 + Math.floor(40 * Math.random())}, 80, ${0.9 * (1 - t)})`;
+            ctx.beginPath();
+            ctx.arc(sx2, sy2, 2.5 * (1 - t * 0.5), 0, Math.PI * 2);
+            ctx.fill();
+          }
+          // expanding ring at the pad
+          ctx.globalAlpha = 0.5 * (1 - p);
+          ctx.strokeStyle = '#fff59d';
+          ctx.lineWidth = 2 * (1 - p);
+          ctx.beginPath();
+          ctx.arc(bx, by, CELL_SIZE * 0.5 + p * CELL_SIZE * 1.4, 0, Math.PI * 2);
+          ctx.stroke();
           ctx.restore();
         }
         break;
@@ -1061,4 +1088,108 @@ export function drawSimulationEffects(
       ctx.restore();
     });
   }
+}
+
+// Draws chevron pointers at the screen edge for any powered block whose
+// on-screen position is outside the visible area. Runs in *screen* space so
+// must be called AFTER ctx.restore() of the zoom transform.
+export function drawOffscreenIndicators(
+  ctx: CanvasRenderingContext2D,
+  blocks: PlacedBlock[],
+  ox: number,
+  oy: number,
+  cam: Camera,
+  zoom: number,
+  w: number,
+  h: number,
+  activeTypes: Set<BlockType>,
+  removedBombs?: Set<string>,
+) {
+  const pad = OFFSCREEN_EDGE_PAD;
+  const hudClearTop = 130; // keep clear of the speed/distance HUD
+  ctx.save();
+  blocks.forEach((b) => {
+    if (!POWERED_TYPES.includes(b.type)) return;
+    if (b.type === 'bomb' && removedBombs?.has(`${b.col},${b.row}`)) return;
+    const wx = ox + b.col * CELL_SIZE + CELL_SIZE / 2;
+    const wy = oy + b.row * CELL_SIZE + CELL_SIZE / 2;
+    const sx = (wx - cam.x) * zoom;
+    const sy = (wy - cam.y) * zoom;
+    const onScreen = sx >= 0 && sx <= w && sy >= 0 && sy <= h;
+    if (onScreen) return;
+
+    // clamp to edge, leave room for HUD
+    const cx = Math.max(pad, Math.min(w - pad, sx));
+    const cy = Math.max(hudClearTop, Math.min(h - pad, sy));
+    const dx = sx - cx;
+    const dy = sy - cy;
+    const angle = Math.atan2(dy, dx);
+
+    const config = BLOCK_CONFIGS[b.type];
+    const isActive = activeTypes.has(b.type);
+
+    // chip
+    ctx.save();
+    ctx.translate(cx, cy);
+    // glowing halo when active
+    if (isActive) {
+      const g = ctx.createRadialGradient(0, 0, 4, 0, 0, 26);
+      g.addColorStop(0, 'rgba(255, 215, 0, 0.55)');
+      g.addColorStop(1, 'rgba(255, 215, 0, 0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(0, 0, 26, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // dot
+    ctx.fillStyle = isActive ? '#ffd700' : config.color;
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, 13, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    // key label
+    ctx.fillStyle = isActive ? '#000' : '#fff';
+    ctx.font = 'bold 10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(POWERED_TYPE_KEY[b.type].toUpperCase(), 0, 0.5);
+    // arrow chevron pointing toward the off-screen block
+    ctx.rotate(angle);
+    ctx.fillStyle = isActive ? '#ffd700' : '#ffffff';
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.moveTo(18, 0);
+    ctx.lineTo(11, -6);
+    ctx.lineTo(11, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  });
+  ctx.restore();
+}
+
+// Soft fog near the far horizon — sells distance without obscuring the ball.
+export function drawFarFog(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  cam: Camera,
+  oy: number,
+  zoom: number,
+) {
+  // Map world distance-past-build-area to a 0..1 fog factor.
+  const distM = (cam.x + w / zoom / 2 - BUILD_WIDTH) / CELL_SIZE;
+  const fog = Math.max(0, Math.min(0.55, (distM - 200) / 1500));
+  if (fog < 0.02) return;
+  const horizonY = (oy + BUILD_HEIGHT - cam.y) * zoom;
+  ctx.save();
+  // bottom-right fog gradient (where distance lives)
+  const grad = ctx.createLinearGradient(w * 0.4, 0, w, 0);
+  grad.addColorStop(0, 'rgba(180, 200, 230, 0)');
+  grad.addColorStop(1, `rgba(180, 200, 230, ${fog})`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(w * 0.4, Math.max(0, horizonY - 240), w, h);
+  ctx.restore();
 }

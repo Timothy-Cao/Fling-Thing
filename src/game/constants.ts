@@ -22,6 +22,8 @@ export interface BlockConfig {
   color: string;
   secondaryColor?: string;
   description: string;
+  /** Long-form hover hint shown in the sidebar. */
+  tip: string;
   hotkey: string;
   category: BlockCategory;
 }
@@ -33,6 +35,7 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     color: '#e94560',
     secondaryColor: '#ff6b81',
     description: 'Place to start',
+    tip: 'Where every run begins. Place exactly one.',
     hotkey: '0',
     category: 'special',
   },
@@ -41,6 +44,7 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     cost: 1,
     color: '#7f8c8d',
     description: '1st free · then 1🪙',
+    tip: 'Walls, floors, scaffolding. Cheap structural piece — build platforms and barriers with it.',
     hotkey: '1',
     category: 'passive',
   },
@@ -49,6 +53,7 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     cost: 2,
     color: '#3498db',
     description: '1st free · then 2🪙',
+    tip: 'Triangular wedge. Converts vertical falls into horizontal momentum.',
     hotkey: '2',
     category: 'passive',
   },
@@ -57,6 +62,7 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     cost: 2,
     color: '#9b59b6',
     description: 'Smooth ramp · 2🪙',
+    tip: 'Smooth arc redirect — preserves ~96% of speed when bending the ball.',
     hotkey: '3',
     category: 'passive',
   },
@@ -66,6 +72,7 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     color: '#85e0ff',
     secondaryColor: '#aaeeff',
     description: 'Zero friction · 3🪙',
+    tip: 'Frictionless surface. Use to keep momentum across long flat stretches.',
     hotkey: '4',
     category: 'passive',
   },
@@ -75,6 +82,7 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     color: '#e74c3c',
     secondaryColor: '#f39c12',
     description: 'Super bounce · 5🪙',
+    tip: 'Super-elastic. Bounces amplify speed — strong but chaotic, watch for endless rebounds.',
     hotkey: '5',
     category: 'passive',
   },
@@ -84,6 +92,7 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     color: '#26c6da',
     secondaryColor: '#80deea',
     description: 'Wind tunnel · 3🪙',
+    tip: 'Always-on directional wind. Strongest in a tight cone in front of the fan.',
     hotkey: '6',
     category: 'passive',
   },
@@ -93,6 +102,7 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     color: '#ff4081',
     secondaryColor: '#f50057',
     description: 'Redirect gravity · 6🪙',
+    tip: 'On contact, briefly redirects gravity in the arrow direction (~1.2s). Great for vaulting.',
     hotkey: '7',
     category: 'passive',
   },
@@ -102,6 +112,7 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     color: '#ffeb3b',
     secondaryColor: '#ff9800',
     description: 'Speed kick pad · 8🪙',
+    tip: 'Snaps ball to a minimum speed in the arrow direction on contact. Stack to build velocity.',
     hotkey: '8',
     category: 'passive',
   },
@@ -111,6 +122,7 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     color: '#27ae60',
     secondaryColor: '#2ecc71',
     description: 'Punch on key · 10🪙',
+    tip: 'Hold Q to extend an arm and apply a strong push to nearby balls.',
     hotkey: 'q',
     category: 'powered',
   },
@@ -120,6 +132,7 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     color: '#2c003e',
     secondaryColor: '#8e44ad',
     description: 'Slingshot pull · 12🪙',
+    tip: 'Hold W to pull the ball in. Release mid-orbit for a free slingshot.',
     hotkey: 'w',
     category: 'powered',
   },
@@ -129,6 +142,7 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     color: '#fffde0',
     secondaryColor: '#f1c40f',
     description: 'Jet thruster · 12🪙',
+    tip: 'Hold D to fire a directional jet from the arrow. Place mid-air to add a power boost.',
     hotkey: 'd',
     category: 'powered',
   },
@@ -138,6 +152,7 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     color: '#00e5ff',
     secondaryColor: '#7c4dff',
     description: 'Teleport · keeps speed · 15🪙',
+    tip: 'Place in pairs. Touching one warps you to the other and gives a small speed bonus.',
     hotkey: 'f',
     category: 'powered',
   },
@@ -147,6 +162,7 @@ export const BLOCK_CONFIGS: Record<BlockType, BlockConfig> = {
     color: '#e67e22',
     secondaryColor: '#d35400',
     description: 'Boom! · 15🪙',
+    tip: 'Press G to detonate. One-shot per run, massive radial blast.',
     hotkey: 'g',
     category: 'powered',
   },
@@ -237,7 +253,12 @@ export const CAMERA_LERP = 0.05;
 export const CAMERA_ZOOM_MIN = 0.6;               // zoomed out when ball is fast
 export const CAMERA_ZOOM_MAX = 1.0;
 export const CAMERA_ZOOM_SPEED_RANGE: [number, number] = [10, 28]; // px/substep mapped to zoom
+export const CAMERA_LEAD_PX = 16;                 // camera bias per (px/substep) of horizontal velocity
+export const CAMERA_LEAD_MAX = 380;               // cap on lead distance
 export const SHAKE_DECAY = 0.82;
+
+// Off-screen indicator chevrons for powered blocks
+export const OFFSCREEN_EDGE_PAD = 32;
 
 // --- Milestones (distance in m) ---
 export const MILESTONES: number[] = [100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000];

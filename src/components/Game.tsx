@@ -21,6 +21,9 @@ import {
   CAMERA_ZOOM_MIN,
   CAMERA_ZOOM_MAX,
   CAMERA_ZOOM_SPEED_RANGE,
+  CAMERA_LEAD_PX,
+  CAMERA_LEAD_MAX,
+  MAX_BALL_SPEED,
   MILESTONES,
   SPEED_TO_MS,
   COLORS,
@@ -41,6 +44,8 @@ import {
   drawPoweredHUD,
   drawSimulationEffects,
   drawMilestonePopups,
+  drawOffscreenIndicators,
+  drawFarFog,
   MilestonePopup,
   resetStarsCache,
 } from '@/game/renderer';
@@ -118,6 +123,7 @@ export default function Game() {
   const [lastRunStats, setLastRunStats] = useState<{ peakMs: number; seconds: number; bounces: number; blocks: number }>({
     peakMs: 0, seconds: 0, bounces: 0, blocks: 0,
   });
+  const [poweredHint, setPoweredHint] = useState(false);
   const [showIntro, setShowIntro] = useState(() => {
     if (typeof window === 'undefined') return true;
     return !localStorage.getItem('fling-blocks');
@@ -274,6 +280,9 @@ export default function Game() {
       drawSimulationEffects(ctx, currentBlocks, ox, oy, cam, activeTypes, frameCount, sim);
 
       const trail = trailRef.current;
+      const v0 = sim?.ballBody.velocity;
+      const rawSpeed = v0 ? Math.sqrt(v0.x * v0.x + v0.y * v0.y) : 0;
+      const speedNorm = Math.min(1, rawSpeed / MAX_BALL_SPEED);
       if (sim) {
         drawBall(
           ctx,
@@ -282,13 +291,16 @@ export default function Game() {
           sim.ballBody.angle,
           trail,
           cam,
+          speedNorm,
         );
       }
 
       ctx.restore();
 
-      const v = sim?.ballBody.velocity;
-      const curSpeedMs = v ? Math.sqrt(v.x * v.x + v.y * v.y) * SPEED_TO_MS : 0;
+      // Atmospheric fog at distance
+      drawFarFog(ctx, w, h, cam, oy, zoom);
+
+      const curSpeedMs = rawSpeed * SPEED_TO_MS;
       const peakMs = (sim?.stats.peakSpeed ?? 0) * SPEED_TO_MS;
       drawDistanceHUD(ctx, w, maxDistanceRef.current, curSpeedMs, peakMs);
 
@@ -298,6 +310,12 @@ export default function Game() {
           .map((b) => b.type),
       )] as BlockType[];
       drawPoweredHUD(ctx, poweredTypesInUse, activeTypes);
+
+      // Off-screen powered-block chevrons (screen space)
+      drawOffscreenIndicators(
+        ctx, currentBlocks, ox, oy, cam, zoom, w, h,
+        activeTypes, sim?.removedBombs,
+      );
 
       drawMilestonePopups(ctx, milestonesRef.current, w, h);
     };
@@ -339,16 +357,21 @@ export default function Game() {
             const targetCamZoom = CAMERA_ZOOM_MAX + (CAMERA_ZOOM_MIN - CAMERA_ZOOM_MAX) * t;
             currentZoomRef.current += (targetCamZoom - currentZoomRef.current) * 0.04;
 
-            // --- Camera follow with shake offset ---
+            // --- Camera follow with lead + shake offset ---
             const zoom = currentZoomRef.current;
-            const targetX = ballBody.position.x - (w / zoom) / 2;
-            const targetY = ballBody.position.y - (h / zoom) / 2;
+            // bias camera ahead of the ball in the direction of motion
+            const leadX = Math.max(-CAMERA_LEAD_MAX, Math.min(CAMERA_LEAD_MAX, v.x * CAMERA_LEAD_PX));
+            const leadY = Math.max(-CAMERA_LEAD_MAX / 2, Math.min(CAMERA_LEAD_MAX / 2, v.y * CAMERA_LEAD_PX * 0.5));
+            const targetX = ballBody.position.x + leadX - (w / zoom) / 2;
+            const targetY = ballBody.position.y + leadY - (h / zoom) / 2;
             cameraRef.current.x += (targetX - cameraRef.current.x) * CAMERA_LERP;
             cameraRef.current.y += (targetY - cameraRef.current.y) * CAMERA_LERP;
             cameraRef.current.y = Math.max(cameraRef.current.y, -200);
 
             trailRef.current.push({ x: ballBody.position.x, y: ballBody.position.y });
-            if (trailRef.current.length > 50) trailRef.current.shift();
+            // Trail length grows with speed: 30 at rest, up to 140 at max.
+            const trailCap = 30 + Math.floor((speedNow / MAX_BALL_SPEED) * 110);
+            while (trailRef.current.length > trailCap) trailRef.current.shift();
 
             const { x: ox, y: oy } = runGridOffsetRef.current;
 
@@ -503,6 +526,17 @@ export default function Game() {
     setMode('running');
     setCurrentDistance(0);
     setSpeed(1);
+
+    // First-run powered-block discovery hint.
+    const hasPowered = blocksRef.current.some((b) => POWERED_TYPES.includes(b.type));
+    const dismissed = typeof window !== 'undefined' && localStorage.getItem('fling-powered-hint-seen');
+    if (hasPowered && !dismissed) {
+      setPoweredHint(true);
+      setTimeout(() => {
+        setPoweredHint(false);
+        try { localStorage.setItem('fling-powered-hint-seen', '1'); } catch {}
+      }, 5500);
+    }
   }, []);
 
   const handleBackToEdit = useCallback(() => {
@@ -534,6 +568,38 @@ export default function Game() {
     setSpeed(1);
     setPreRotation(0);
   }, [snapshot]);
+
+  const handleTryAgain = useCallback(() => {
+    // Re-run with the same build, skipping the edit screen.
+    if (simRef.current) {
+      stopSim(simRef.current);
+      simRef.current = null;
+    }
+    setMode('edit');
+    // microtask so handleRun reads fresh refs and mode transitions cleanly
+    requestAnimationFrame(() => {
+      handleRun();
+    });
+  }, [handleRun]);
+
+  const [copyToast, setCopyToast] = useState<string | null>(null);
+  const handleCopyResult = useCallback(async () => {
+    try {
+      const payload = { v: 2, b: blocksRef.current, c: coinsRef.current };
+      const json = JSON.stringify(payload);
+      const bytes = new TextEncoder().encode(json);
+      let bin = '';
+      bytes.forEach((b) => { bin += String.fromCharCode(b); });
+      const code = 'FT2|' + btoa(bin).replace(/=+$/, '');
+      const msg = `🚀 I flung it ${currentDistance.toFixed(1)}m in Fling Thing! Try my build:\n${code}`;
+      await navigator.clipboard.writeText(msg);
+      setCopyToast('Copied result + build to clipboard');
+      setTimeout(() => setCopyToast(null), 2200);
+    } catch {
+      setCopyToast('Copy failed');
+      setTimeout(() => setCopyToast(null), 2200);
+    }
+  }, [currentDistance]);
 
   const handleSpeedToggle = useCallback(() => {
     setSpeed((s) => {
@@ -797,6 +863,7 @@ export default function Game() {
         }
 
         if (e.key === 'Delete' || e.key === 'Backspace') {
+          e.preventDefault(); // keep browser-back from firing on Backspace
           const hover = hoverCellRef.current;
           if (!hover) return;
           snapshot();
@@ -868,6 +935,8 @@ export default function Game() {
 
   // --- SIDEBAR ---
 
+  const [hoveredTip, setHoveredTip] = useState<BlockType | null>(null);
+
   const renderBlockItem = (type: BlockType) => {
     const config = BLOCK_CONFIGS[type];
     const isSelected = selectedBlock === type;
@@ -884,6 +953,9 @@ export default function Game() {
           if (prev !== type) setPreRotation(0);
           return prev === type ? null : type;
         }); }}
+        onMouseEnter={() => setHoveredTip(type)}
+        onMouseLeave={() => setHoveredTip((cur) => (cur === type ? null : cur))}
+        title={config.tip}
         className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl border-2 transition-all text-left ${
           isSelected
             ? 'border-[#e94560] bg-[#1a3a6e] shadow-[0_0_12px_rgba(233,69,96,0.25)]'
@@ -955,6 +1027,21 @@ export default function Game() {
         <div className="text-[10px] text-[#e94560]/60 uppercase tracking-[0.15em] font-bold mt-2 mb-0.5 px-1">Powered ⚡</div>
         <div className="flex flex-col gap-1.5">
           {poweredBlocks.map(renderBlockItem)}
+        </div>
+
+        {/* Hover tip panel (reserved height so the sidebar doesn't jump) */}
+        <div className="mt-2 mb-1 min-h-[60px] rounded-lg bg-white/[0.04] border border-white/5 p-2.5 transition-all">
+          {hoveredTip ? (
+            <>
+              <div className="text-[10px] uppercase tracking-wider text-[#e94560]/70 font-bold mb-1 flex items-center gap-1.5">
+                {BLOCK_CONFIGS[hoveredTip].name}
+                <span className="text-[9px] text-gray-500 font-mono normal-case tracking-normal">[{BLOCK_CONFIGS[hoveredTip].hotkey.toUpperCase()}]</span>
+              </div>
+              <div className="text-[11px] text-gray-300 leading-snug">{BLOCK_CONFIGS[hoveredTip].tip}</div>
+            </>
+          ) : (
+            <div className="text-[10px] text-gray-600 italic leading-snug">Hover a block to see what it does.</div>
+          )}
         </div>
 
         <div className="mt-auto pt-3 border-t border-white/5">
@@ -1110,14 +1197,45 @@ export default function Game() {
                   </div>
                 </div>
 
-                <button
-                  onClick={handleBackToEdit}
-                  className="px-14 py-4 rounded-xl font-bold bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_16px_rgba(16,185,129,0.3)] cursor-pointer text-lg transition-all"
-                >
-                  ← Edit
-                </button>
-                <div className="text-[10px] text-gray-600 mt-3">Press R or Esc</div>
+                <div className="flex flex-col gap-2 items-stretch">
+                  <button
+                    onClick={handleTryAgain}
+                    className="px-12 py-3.5 rounded-xl font-bold bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_16px_rgba(16,185,129,0.3)] cursor-pointer text-base transition-all"
+                  >
+                    ↻ Try again
+                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleBackToEdit}
+                      className="flex-1 px-4 py-2.5 rounded-xl font-semibold bg-white/5 text-gray-200 hover:bg-white/10 border border-white/10 cursor-pointer text-sm transition-all"
+                    >
+                      ← Edit
+                    </button>
+                    <button
+                      onClick={handleCopyResult}
+                      className="flex-1 px-4 py-2.5 rounded-xl font-semibold bg-white/5 text-gray-200 hover:bg-white/10 border border-white/10 cursor-pointer text-sm transition-all"
+                    >
+                      Share result
+                    </button>
+                  </div>
+                </div>
+                <div className="text-[10px] text-gray-600 mt-3">Press R or Esc to go back</div>
               </div>
+            </div>
+          )}
+
+          {/* Powered keys discovery toast */}
+          {poweredHint && mode === 'running' && (
+            <div className="pointer-events-none absolute bottom-6 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur-md border border-yellow-400/30 rounded-xl px-5 py-3 shadow-lg z-10 animate-pulse">
+              <div className="text-yellow-300 text-sm font-bold tracking-wide">⚡ Hold 1-5 to fire powered blocks</div>
+              <div className="text-[10px] text-gray-400 mt-0.5">1 Piston · 2 Black Hole · 3 White Hole · 4 Portal · 5 Bomb</div>
+            </div>
+          )}
+
+          {/* Copy toast */}
+          {copyToast && (
+            <div className="pointer-events-none absolute top-6 left-1/2 -translate-x-1/2 bg-black/80 border border-emerald-400/30 rounded-xl px-4 py-2 shadow-lg z-30">
+              <div className="text-emerald-300 text-sm font-semibold">{copyToast}</div>
             </div>
           )}
 
