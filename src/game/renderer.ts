@@ -431,6 +431,53 @@ export function drawBlockShape(
   ctx.restore();
 }
 
+// Direction of the launch arrow per slope rotation. Mirrors slopeRedirect()
+// in physics.ts: 0 = right, 1 = left, 2 = down, 3 = up-right (ski-jump).
+const SLOPE_ARROW_DIRS: Array<[number, number]> = [
+  [1, 0],       // rot 0: right
+  [-1, 0],      // rot 1: left
+  [0, 1],       // rot 2: down
+  [0.85, -0.5], // rot 3: up-right
+];
+
+function drawSlopeArrow(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  rotation: number,
+) {
+  const [dx, dy] = SLOPE_ARROW_DIRS[rotation % 4];
+  const len = Math.hypot(dx, dy);
+  const ux = dx / len;
+  const uy = dy / len;
+  // Position the arrow centroid roughly at the cell's air region for each
+  // rotation — opposite corner from the solid mass.
+  const cx = x + CELL_SIZE / 2 - ux * 9;
+  const cy = y + CELL_SIZE / 2 - uy * 9;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  const tipX = cx + ux * 8;
+  const tipY = cy + uy * 8;
+  // arrow shaft
+  ctx.beginPath();
+  ctx.moveTo(cx - ux * 6, cy - uy * 6);
+  ctx.lineTo(tipX, tipY);
+  ctx.stroke();
+  // arrowhead
+  const px = -uy; // perpendicular
+  const py = ux;
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX - ux * 5 + px * 4, tipY - uy * 5 + py * 4);
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX - ux * 5 - px * 4, tipY - uy * 5 - py * 4);
+  ctx.stroke();
+  ctx.restore();
+}
+
 export function drawPlacedBlock(
   ctx: CanvasRenderingContext2D,
   block: PlacedBlock,
@@ -444,6 +491,12 @@ export function drawPlacedBlock(
   const x = ox + block.col * CELL_SIZE - camX;
   const y = oy + block.row * CELL_SIZE - camY;
   drawBlockShape(ctx, block.type, x, y, block.rotation);
+
+  // Launch-direction indicator on slopes so players can read which way a
+  // ramp or curve will throw a falling ball.
+  if (block.type === 'ramp' || block.type === 'curve') {
+    drawSlopeArrow(ctx, x, y, block.rotation);
+  }
 
   const isPowered = POWERED_TYPES.includes(block.type);
   if (isPowered) {

@@ -46,6 +46,55 @@ const { Engine, World, Bodies, Body, Events } = Matter;
 
 const DIRS: Array<[number, number]> = [[0, -1], [1, 0], [0, 1], [-1, 0]];
 
+/**
+ * Slope velocity redirect (shared by ramps and curves).
+ *
+ * Conventions (matches user visual intuition of the block art):
+ *   rotation 0 (slope `/`)  : convert downward motion → rightward
+ *   rotation 1 (slope `\`)  : convert downward motion → leftward
+ *   rotation 2 (inverted `/`): convert rightward motion → downward
+ *   rotation 3 (inverted `\`): convert downward motion → rightward (ski-jump)
+ */
+function slopeRedirect(rotation: number, vx: number, vy: number) {
+  const speed = Math.sqrt(vx * vx + vy * vy);
+  if (speed < 0.5) return null;
+  const KEEP = 0.92;
+  let nvx = vx;
+  let nvy = vy;
+  let fired = false;
+  switch (rotation % 4) {
+    case 0:
+      if (Math.abs(vy) > Math.abs(vx)) {
+        nvx = speed * KEEP;
+        nvy = -speed * 0.2;
+        fired = true;
+      }
+      break;
+    case 1:
+      if (Math.abs(vy) > Math.abs(vx)) {
+        nvx = -speed * KEEP;
+        nvy = -speed * 0.2;
+        fired = true;
+      }
+      break;
+    case 2:
+      if (Math.abs(vx) > Math.abs(vy)) {
+        nvx = -speed * 0.2;
+        nvy = speed * KEEP;
+        fired = true;
+      }
+      break;
+    case 3:
+      if (Math.abs(vy) > Math.abs(vx) * 0.5) {
+        nvx = speed * KEEP;
+        nvy = speed * 0.2;
+        fired = true;
+      }
+      break;
+  }
+  return fired ? { vx: nvx, vy: nvy, speed } : null;
+}
+
 export function createPhysicsBody(block: PlacedBlock, offsetX: number, offsetY: number): Matter.Body | null {
   const cx = offsetX + block.col * CELL_SIZE + CELL_SIZE / 2;
   const cy = offsetY + block.row * CELL_SIZE + CELL_SIZE / 2;
@@ -65,6 +114,7 @@ export function createPhysicsBody(block: PlacedBlock, offsetX: number, offsetY: 
       return Bodies.fromVertices(cx + centroidX, cy + centroidY, [verts], {
         isStatic: true,
         friction: RAMP_FRICTION,
+        label: `ramp_${block.col}_${block.row}_${block.rotation}`,
       });
     }
     case 'curve': {
@@ -136,12 +186,22 @@ function blockKey(block: PlacedBlock): string {
   return `${block.col},${block.row}`;
 }
 
+// INVARIANT: MAX_BALL_SPEED must remain < CELL_SIZE so even a bouncy block's
+// (1 + restitution = 2.6×) post-impulse spike — applied to a body whose
+// pre-step velocity was already clamped to MAX_BALL_SPEED — cannot push the
+// ball through a one-cell-thick obstacle during a single substep. Do not
+// raise MAX_BALL_SPEED above ~36 without also lowering BOUNCY_RESTITUTION.
+const MAX_ANGULAR_VELOCITY = 8; // rad/step — visual sanity; ~76 rev/s at 60Hz
+
 function clampBallSpeed(ball: Matter.Body) {
   const v = ball.velocity;
   const s = Math.sqrt(v.x * v.x + v.y * v.y);
   if (s > MAX_BALL_SPEED) {
     const r = MAX_BALL_SPEED / s;
     Body.setVelocity(ball, { x: v.x * r, y: v.y * r });
+  }
+  if (Math.abs(ball.angularVelocity) > MAX_ANGULAR_VELOCITY) {
+    Body.setAngularVelocity(ball, Math.sign(ball.angularVelocity) * MAX_ANGULAR_VELOCITY);
   }
 }
 
@@ -222,54 +282,29 @@ export function startSimulation(
     shake: { x: 0, y: 0, intensity: 0 },
   };
 
-  // Curve redirect handler (smoother + speed-preserving)
+  // Unified slope redirect handler — ramps and curves share conventions so
+  // rotation N has the same effect on either block type. Also sets angular
+  // velocity to match the new direction so visible spin tracks the redirect.
   Events.on(engine, 'collisionStart', (event) => {
     event.pairs.forEach((pair) => {
       const { bodyA, bodyB } = pair;
-      const curveBody = bodyA.label?.startsWith('curve_') ? bodyA
-        : bodyB.label?.startsWith('curve_') ? bodyB : null;
-      if (!curveBody) return;
-      const otherBody = curveBody === bodyA ? bodyB : bodyA;
+      const slopeBody =
+        bodyA.label?.startsWith('curve_') || bodyA.label?.startsWith('ramp_') ? bodyA
+        : bodyB.label?.startsWith('curve_') || bodyB.label?.startsWith('ramp_') ? bodyB
+        : null;
+      if (!slopeBody) return;
+      const otherBody = slopeBody === bodyA ? bodyB : bodyA;
       if (otherBody.label !== 'ball') return;
 
-      const speed = Math.sqrt(otherBody.velocity.x ** 2 + otherBody.velocity.y ** 2);
-      if (speed < 0.5) return;
-
-      const parts = curveBody.label!.split('_');
+      const parts = slopeBody.label!.split('_');
       const rotation = parseInt(parts[3]);
+      const redirected = slopeRedirect(rotation, otherBody.velocity.x, otherBody.velocity.y);
+      if (!redirected) return;
 
-      let newVx = otherBody.velocity.x;
-      let newVy = otherBody.velocity.y;
-      const KEEP = 0.96;
-
-      switch (rotation % 4) {
-        case 0:
-          if (Math.abs(otherBody.velocity.y) > Math.abs(otherBody.velocity.x)) {
-            newVx = speed * KEEP;
-            newVy = -speed * 0.18;
-          }
-          break;
-        case 1:
-          if (Math.abs(otherBody.velocity.y) > Math.abs(otherBody.velocity.x)) {
-            newVx = -speed * KEEP;
-            newVy = -speed * 0.18;
-          }
-          break;
-        case 2:
-          if (Math.abs(otherBody.velocity.x) > Math.abs(otherBody.velocity.y)) {
-            newVx = -speed * 0.18;
-            newVy = speed * KEEP;
-          }
-          break;
-        case 3:
-          if (Math.abs(otherBody.velocity.y) > Math.abs(otherBody.velocity.x) * 0.5) {
-            newVx = speed * KEEP;
-            newVy = speed * 0.18;
-          }
-          break;
-      }
-
-      Body.setVelocity(otherBody, { x: newVx, y: newVy });
+      Body.setVelocity(otherBody, { x: redirected.vx, y: redirected.vy });
+      // Forward spin: rolling-without-slipping. Sign from horizontal direction.
+      const spin = redirected.vx / BALL_RADIUS;
+      Body.setAngularVelocity(otherBody, spin);
     });
   });
 
@@ -300,10 +335,12 @@ export function startSimulation(
       // keep perpendicular component to avoid jarring redirects
       const perpX = v.x - along * dx;
       const perpY = v.y - along * dy;
-      Body.setVelocity(otherBody, {
-        x: perpX + dx * newAlong,
-        y: perpY + dy * newAlong,
-      });
+      const finalVx = perpX + dx * newAlong;
+      const finalVy = perpY + dy * newAlong;
+      Body.setVelocity(otherBody, { x: finalVx, y: finalVy });
+      // Match spin to new horizontal direction so the ball doesn't look
+      // weirdly still right after a boost.
+      Body.setAngularVelocity(otherBody, finalVx / BALL_RADIUS);
       sim.boosterCooldowns.set(key, BOOSTER_COOLDOWN);
       sim.boostFlashes.push({
         x: boosterBody.position.x,
@@ -336,9 +373,10 @@ export function startSimulation(
       const speed = Math.sqrt(vx * vx + vy * vy);
       if (speed < 0.5) return;
 
-      // gentler decay; preserve horizontal more than vertical
-      const newVx = vx * 0.95;
-      const newVy = vy * 0.55;
+      // Preserve horizontal momentum, lightly damp vertical so balls visibly
+      // bounce 4–5 times before settling instead of going flat in 2.
+      const newVx = vx * 0.98;
+      const newVy = vy * 0.78;
       Body.setVelocity(ball, { x: newVx, y: newVy });
     });
   });
