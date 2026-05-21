@@ -101,6 +101,13 @@ export default function Game() {
   const paintingRef = useRef(false);
   const lastPaintCellRef = useRef<string | null>(null);
   const eraserRef = useRef(false);
+  // Right-mouse drag-to-erase tracking. We only treat a right-mouse stroke as
+  // an erase gesture once the cursor leaves the cell it started on, so a
+  // single right-click still triggers the rotate flow.
+  const rightDraggingRef = useRef(false);
+  const rightDragMovedRef = useRef(false);
+  const rightStartCellRef = useRef<{ col: number; row: number } | null>(null);
+  const lastRightCellRef = useRef<string | null>(null);
 
   const [blocks, setBlocks] = useState<PlacedBlock[]>(() => {
     if (typeof window === 'undefined') return [];
@@ -718,24 +725,47 @@ export default function Game() {
     (cell: { col: number; row: number }, pickUp: boolean) => {
       setBlocks((prev) => {
         const existingIndex = prev.findIndex((b) => b.col === cell.col && b.row === cell.row);
+        const selBlock = selectedBlockRef.current;
 
         if (existingIndex >= 0) {
-          if (!pickUp) return prev;
           const existing = prev[existingIndex];
+
+          if (pickUp) {
+            // Click on an occupied cell -> refund + pick up + select the type.
+            const remaining = prev.filter((_, i) => i !== existingIndex);
+            if (existing.type !== 'ball') {
+              const othersOfType = remaining.filter((b) => b.type === existing.type);
+              if (othersOfType.length >= 1) {
+                setCoins((c) => c + BLOCK_CONFIGS[existing.type].cost);
+              }
+            }
+            setSelectedBlock(existing.type);
+            return remaining;
+          }
+
+          // Drag over an occupied cell with a different block selected ->
+          // swap it in (refund the old, charge the new). Same type = no-op.
+          if (!selBlock || selBlock === existing.type) return prev;
+          if (selBlock === 'ball' && prev.some((b) => b.type === 'ball' && b !== existing)) return prev;
+
           const remaining = prev.filter((_, i) => i !== existingIndex);
+          let refund = 0;
           if (existing.type !== 'ball') {
             const othersOfType = remaining.filter((b) => b.type === existing.type);
-            if (othersOfType.length >= 1) {
-              setCoins((c) => c + BLOCK_CONFIGS[existing.type].cost);
-            }
+            if (othersOfType.length >= 1) refund = BLOCK_CONFIGS[existing.type].cost;
           }
-          setSelectedBlock(existing.type);
-          return remaining;
+          const newCost = getBlockCost(selBlock, remaining);
+          if (newCost > coinsRef.current + refund) return prev; // can't afford swap
+
+          setCoins((c) => c + refund - newCost);
+          return [
+            ...remaining,
+            { type: selBlock, col: cell.col, row: cell.row, rotation: preRotationRef.current },
+          ];
         }
 
-        const selBlock = selectedBlockRef.current;
+        // Empty cell.
         if (!selBlock) return prev;
-
         const isBallPlaced = prev.some((b) => b.type === 'ball');
         if (selBlock === 'ball' && isBallPlaced) return prev;
 
@@ -775,30 +805,60 @@ export default function Game() {
 
   const handleCanvasMouseDown = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (e.button !== 0 || modeRef.current !== 'edit') return;
-      paintingRef.current = true;
+      if (modeRef.current !== 'edit') return;
       const cell = getGridCell(e.clientX, e.clientY);
-      if (!cell) return;
-      lastPaintCellRef.current = `${cell.col},${cell.row}`;
-      snapshot();
-      if (eraserRef.current) {
-        eraseBlockAt(cell);
-      } else {
-        placeBlockAt(cell, true);
+
+      if (e.button === 0) {
+        paintingRef.current = true;
+        if (!cell) return;
+        lastPaintCellRef.current = `${cell.col},${cell.row}`;
+        snapshot();
+        if (eraserRef.current) {
+          eraseBlockAt(cell);
+        } else {
+          placeBlockAt(cell, true);
+        }
+        return;
+      }
+
+      if (e.button === 2) {
+        // Start tracking a potential right-drag erase. We don't erase yet —
+        // a single right-click should still rotate, only a real drag erases.
+        rightDraggingRef.current = true;
+        rightDragMovedRef.current = false;
+        rightStartCellRef.current = cell;
+        lastRightCellRef.current = cell ? `${cell.col},${cell.row}` : null;
       }
     },
     [getGridCell, placeBlockAt, eraseBlockAt, snapshot],
   );
 
-  const handleCanvasMouseUp = useCallback(() => {
-    paintingRef.current = false;
-    lastPaintCellRef.current = null;
+  const handleCanvasMouseUp = useCallback((e?: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!e || e.button === 0) {
+      paintingRef.current = false;
+      lastPaintCellRef.current = null;
+    }
+    if (!e || e.button === 2) {
+      // contextmenu fires after mouseup, so we DON'T clear rightDragMovedRef
+      // here — it's read in onContextMenu and cleared there.
+      rightDraggingRef.current = false;
+      lastRightCellRef.current = null;
+      rightStartCellRef.current = null;
+    }
   }, []);
 
   const handleCanvasRightClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       e.preventDefault();
       if (modeRef.current !== 'edit') return;
+
+      // If the right-mouse actually moved across cells, the user was dragging
+      // to erase — don't treat the contextmenu fallout as a rotate.
+      if (rightDragMovedRef.current) {
+        rightDragMovedRef.current = false;
+        return;
+      }
+
       const cell = getGridCell(e.clientX, e.clientY);
       if (!cell) return;
 
@@ -839,8 +899,24 @@ export default function Game() {
           }
         }
       }
+
+      // Right-mouse drag-erase: once the cursor enters a different cell, treat
+      // the gesture as a drag and erase everything we cross, including the
+      // start cell.
+      if (rightDraggingRef.current && cell) {
+        const key = `${cell.col},${cell.row}`;
+        if (key !== lastRightCellRef.current) {
+          if (!rightDragMovedRef.current) {
+            rightDragMovedRef.current = true;
+            snapshot();
+            if (rightStartCellRef.current) eraseBlockAt(rightStartCellRef.current);
+          }
+          eraseBlockAt(cell);
+          lastRightCellRef.current = key;
+        }
+      }
     },
-    [getGridCell, placeBlockAt, eraseBlockAt],
+    [getGridCell, placeBlockAt, eraseBlockAt, snapshot],
   );
 
 
@@ -1086,10 +1162,11 @@ export default function Game() {
           </div>
           <div className="text-[10px] text-gray-600 leading-relaxed space-y-0.5">
             <div className="text-[9px] text-gray-500 uppercase tracking-wider font-semibold mb-1">Controls</div>
-            <div>Click / drag: Place blocks</div>
-            <div>Right-click: Rotate</div>
-            <div>E: Eraser (drag to delete)</div>
-            <div>Del: Remove single</div>
+            <div>Click: place · pick up</div>
+            <div>Left-drag: paint · replace</div>
+            <div>Right-click: rotate</div>
+            <div className="text-red-300/70">Right-drag: erase</div>
+            <div>E: eraser mode · Del: erase hovered</div>
             <div>Ctrl+Z / Ctrl+Y: Undo / Redo</div>
             <div className="text-gray-700 mt-1">Sim: Hold 1-5 for powered · Space speed · R stop</div>
           </div>
@@ -1213,7 +1290,15 @@ export default function Game() {
             onMouseUp={handleCanvasMouseUp}
             onContextMenu={handleCanvasRightClick}
             onMouseMove={handleCanvasMouseMove}
-            onMouseLeave={() => { setHoverCell(null); paintingRef.current = false; lastPaintCellRef.current = null; }}
+            onMouseLeave={() => {
+              setHoverCell(null);
+              paintingRef.current = false;
+              lastPaintCellRef.current = null;
+              rightDraggingRef.current = false;
+              rightDragMovedRef.current = false;
+              lastRightCellRef.current = null;
+              rightStartCellRef.current = null;
+            }}
             className="block w-full h-full"
           />
 
