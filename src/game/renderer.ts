@@ -34,7 +34,7 @@ function getStars(w: number, h: number) {
   return starsCache;
 }
 
-function getMountains(w: number) {
+function getMountains(_w: number) {
   if (mountainsCache) return mountainsCache;
   mountainsCache = [];
   const layers = [
@@ -44,7 +44,6 @@ function getMountains(w: number) {
   ];
   for (const layer of layers) {
     const peaks: number[] = [];
-    const step = (w * 2) / layer.count;
     for (let i = 0; i <= layer.count + 2; i++) {
       peaks.push(layer.minH + Math.random() * (layer.maxH - layer.minH));
     }
@@ -676,12 +675,13 @@ export function drawBall(
   ctx: CanvasRenderingContext2D,
   bx: number,
   by: number,
+  angle: number,
   trail: { x: number; y: number }[],
   cam: Camera,
 ) {
   for (let i = 0; i < trail.length; i++) {
-    const alpha = (i / trail.length) * 0.3;
-    const size = BALL_RADIUS * (0.3 + (i / trail.length) * 0.7);
+    const alpha = (i / trail.length) * 0.35;
+    const size = BALL_RADIUS * (0.25 + (i / trail.length) * 0.75);
     ctx.fillStyle = `rgba(233, 69, 96, ${alpha})`;
     ctx.beginPath();
     ctx.arc(trail[i].x - cam.x, trail[i].y - cam.y, size, 0, Math.PI * 2);
@@ -691,47 +691,156 @@ export function drawBall(
   const sx = bx - cam.x;
   const sy = by - cam.y;
 
-  const glow = ctx.createRadialGradient(sx, sy, BALL_RADIUS, sx, sy, BALL_RADIUS * 2.5);
-  glow.addColorStop(0, 'rgba(233, 69, 96, 0.2)');
+  const glow = ctx.createRadialGradient(sx, sy, BALL_RADIUS, sx, sy, BALL_RADIUS * 2.6);
+  glow.addColorStop(0, 'rgba(233, 69, 96, 0.22)');
   glow.addColorStop(1, 'rgba(233, 69, 96, 0)');
   ctx.fillStyle = glow;
   ctx.beginPath();
-  ctx.arc(sx, sy, BALL_RADIUS * 2.5, 0, Math.PI * 2);
+  ctx.arc(sx, sy, BALL_RADIUS * 2.6, 0, Math.PI * 2);
   ctx.fill();
 
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.rotate(angle);
   ctx.fillStyle = BLOCK_CONFIGS.ball.color;
   ctx.beginPath();
-  ctx.arc(sx, sy, BALL_RADIUS, 0, Math.PI * 2);
+  ctx.arc(0, 0, BALL_RADIUS, 0, Math.PI * 2);
+  ctx.fill();
+  // Spin marks: a darker hemisphere stripe so rotation is legible
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.beginPath();
+  ctx.arc(0, 0, BALL_RADIUS, -0.6, 0.6);
+  ctx.lineTo(0, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(0, 0, BALL_RADIUS, Math.PI - 0.6, Math.PI + 0.6);
+  ctx.lineTo(0, 0);
+  ctx.closePath();
   ctx.fill();
   ctx.strokeStyle = '#ff6b81';
   ctx.lineWidth = 2;
-  ctx.stroke();
-
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
   ctx.beginPath();
-  ctx.arc(sx - 3, sy - 3, BALL_RADIUS * 0.4, 0, Math.PI * 2);
+  ctx.arc(0, 0, BALL_RADIUS, 0, Math.PI * 2);
+  ctx.stroke();
+  // specular dot fixed in screen space — un-rotate
+  ctx.rotate(-angle);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+  ctx.beginPath();
+  ctx.arc(-3, -3, BALL_RADIUS * 0.4, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
 }
 
-export function drawDistanceHUD(ctx: CanvasRenderingContext2D, w: number, distance: number) {
+export function drawDistanceHUD(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  distance: number,
+  speedMs: number,
+  peakSpeedMs: number,
+) {
   ctx.save();
-  ctx.fillStyle = 'rgba(15, 52, 96, 0.9)';
-  const hudW = 240;
-  const hudH = 50;
+  const hudW = 260;
+  const hudH = 96;
   const hudX = w - hudW - 16;
   const hudY = 16;
+
+  ctx.fillStyle = 'rgba(15, 25, 50, 0.88)';
   ctx.beginPath();
-  ctx.roundRect(hudX, hudY, hudW, hudH, 10);
+  ctx.roundRect(hudX, hudY, hudW, hudH, 12);
   ctx.fill();
-  ctx.strokeStyle = 'rgba(255, 215, 0, 0.3)';
+  ctx.strokeStyle = 'rgba(255, 215, 0, 0.28)';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.roundRect(hudX, hudY, hudW, hudH, 10);
+  ctx.roundRect(hudX, hudY, hudW, hudH, 12);
   ctx.stroke();
+
+  // Distance (big)
+  ctx.fillStyle = 'rgba(255, 215, 0, 0.55)';
+  ctx.font = 'bold 9px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText('DISTANCE', hudX + 14, hudY + 22);
   ctx.fillStyle = '#ffd700';
-  ctx.font = 'bold 20px sans-serif';
+  ctx.font = 'bold 28px sans-serif';
+  ctx.fillText(`${distance.toFixed(1)}`, hudX + 14, hudY + 50);
+  ctx.fillStyle = 'rgba(255, 215, 0, 0.5)';
+  ctx.font = 'bold 11px sans-serif';
+  ctx.fillText('m', hudX + 14 + ctx.measureText(distance.toFixed(1)).width + 4, hudY + 50);
+
+  // Speed + peak (right side)
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+  ctx.font = 'bold 9px sans-serif';
+  ctx.fillText('SPEED', hudX + hudW - 14, hudY + 22);
+  ctx.fillStyle = '#9ee5ff';
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillText(`${speedMs.toFixed(0)} m/s`, hudX + hudW - 14, hudY + 44);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+  ctx.font = '10px sans-serif';
+  ctx.fillText(`peak ${peakSpeedMs.toFixed(0)}`, hudX + hudW - 14, hudY + 58);
+
+  // Mini speed bar
+  const barX = hudX + 14;
+  const barY = hudY + 70;
+  const barW = hudW - 28;
+  const barH = 8;
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.beginPath();
+  ctx.roundRect(barX, barY, barW, barH, 3);
+  ctx.fill();
+  const t = Math.min(1, speedMs / 200);
+  const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+  grad.addColorStop(0, '#3ecbff');
+  grad.addColorStop(0.6, '#ffd166');
+  grad.addColorStop(1, '#ff5a4f');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.roundRect(barX, barY, Math.max(2, barW * t), barH, 3);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+export interface MilestonePopup {
+  value: number;
+  frame: number;
+}
+
+export function drawMilestonePopups(
+  ctx: CanvasRenderingContext2D,
+  popups: MilestonePopup[],
+  w: number,
+  h: number,
+) {
+  if (popups.length === 0) return;
+  ctx.save();
   ctx.textAlign = 'center';
-  ctx.fillText(`${distance.toFixed(1)} blocks`, hudX + hudW / 2, hudY + 32);
+  ctx.textBaseline = 'middle';
+  popups.forEach((p) => {
+    // 90 frame lifetime: 0-15 grow, 15-60 hold, 60-90 fade
+    const t = p.frame / 90;
+    const scale = t < 0.17 ? (t / 0.17) ** 0.6 : 1;
+    const alpha = t < 0.67 ? 1 : 1 - (t - 0.67) / 0.33;
+    const y = h * 0.18 - (t * 25);
+    ctx.globalAlpha = Math.max(0, alpha);
+    ctx.font = `bold ${Math.floor(56 * scale)}px sans-serif`;
+    const label = p.value >= 1000 ? `${(p.value / 1000).toFixed(p.value % 1000 === 0 ? 0 : 1)} KM` : `${p.value} M`;
+    // shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillText(label, w / 2 + 3, y + 3);
+    // glow
+    ctx.shadowColor = '#ffd700';
+    ctx.shadowBlur = 24 * alpha;
+    ctx.fillStyle = '#ffe066';
+    ctx.fillText(label, w / 2, y);
+    ctx.shadowBlur = 0;
+    // subtitle
+    ctx.globalAlpha = Math.max(0, alpha) * 0.85;
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText('milestone reached', w / 2, y + 36 * scale);
+  });
   ctx.restore();
 }
 

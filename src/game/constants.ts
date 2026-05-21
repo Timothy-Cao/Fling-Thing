@@ -228,8 +228,23 @@ export const MAX_BALL_SPEED = 32;            // px per substep — well under ce
 // --- End conditions ---
 export const VELOCITY_THRESHOLD = 0.1;
 export const STILL_FRAMES_REQUIRED = 150;
+export const STUCK_FRAMES_REQUIRED = 90;          // ~1.5s with very small position delta
+export const STUCK_POSITION_DELTA_PX = 8;
+export const RUN_MAX_FRAMES = 60 * 90;            // 90 second hard timeout
 
+// --- Camera / feel ---
 export const CAMERA_LERP = 0.05;
+export const CAMERA_ZOOM_MIN = 0.6;               // zoomed out when ball is fast
+export const CAMERA_ZOOM_MAX = 1.0;
+export const CAMERA_ZOOM_SPEED_RANGE: [number, number] = [10, 28]; // px/substep mapped to zoom
+export const SHAKE_DECAY = 0.82;
+
+// --- Milestones (distance in m) ---
+export const MILESTONES: number[] = [100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000];
+
+// Convert matter-velocity (px/substep) to m/s for display.
+// Each substep represents PHYSICS_DT ms of sim time, and 1m = CELL_SIZE px.
+export const SPEED_TO_MS = (1000 / PHYSICS_DT) / CELL_SIZE; // multiply px/step by this
 
 export const COLORS = {
   sky1: '#0f0c29',

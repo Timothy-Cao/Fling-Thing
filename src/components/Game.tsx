@@ -14,11 +14,20 @@ import {
   POWERED_KEY_MAP,
   VELOCITY_THRESHOLD,
   STILL_FRAMES_REQUIRED,
+  STUCK_FRAMES_REQUIRED,
+  STUCK_POSITION_DELTA_PX,
+  RUN_MAX_FRAMES,
   CAMERA_LERP,
+  CAMERA_ZOOM_MIN,
+  CAMERA_ZOOM_MAX,
+  CAMERA_ZOOM_SPEED_RANGE,
+  MILESTONES,
+  SPEED_TO_MS,
   COLORS,
   BlockType,
 } from '@/game/constants';
 import { PlacedBlock, GameMode, Camera } from '@/game/types';
+import { TEMPLATES } from '@/game/templates';
 import {
   drawBlockShape,
   drawPlacedBlock,
@@ -31,6 +40,8 @@ import {
   drawDistanceHUD,
   drawPoweredHUD,
   drawSimulationEffects,
+  drawMilestonePopups,
+  MilestonePopup,
   resetStarsCache,
 } from '@/game/renderer';
 import {
@@ -61,6 +72,14 @@ export default function Game() {
   const trailRef = useRef<{ x: number; y: number }[]>([]);
   const editZoomRef = useRef(1);
   const currentZoomRef = useRef(1);
+
+  const milestonesRef = useRef<MilestonePopup[]>([]);
+  const milestonesHitRef = useRef<Set<number>>(new Set());
+  const lastPosRef = useRef<{ x: number; y: number } | null>(null);
+  const stuckFramesRef = useRef(0);
+  const runFramesRef = useRef(0);
+  const undoStackRef = useRef<{ blocks: PlacedBlock[]; coins: number }[]>([]);
+  const redoStackRef = useRef<{ blocks: PlacedBlock[]; coins: number }[]>([]);
 
   const blocksRef = useRef<PlacedBlock[]>([]);
   const modeRef = useRef<GameMode>('edit');
@@ -96,6 +115,9 @@ export default function Game() {
   const [speed, setSpeed] = useState(1);
   const [preRotation, setPreRotation] = useState(0);
   const [eraserMode, setEraserMode] = useState(false);
+  const [lastRunStats, setLastRunStats] = useState<{ peakMs: number; seconds: number; bounces: number; blocks: number }>({
+    peakMs: 0, seconds: 0, bounces: 0, blocks: 0,
+  });
   const [showIntro, setShowIntro] = useState(() => {
     if (typeof window === 'undefined') return true;
     return !localStorage.getItem('fling-blocks');
@@ -216,7 +238,11 @@ export default function Game() {
 
     const renderRun = (w: number, h: number) => {
       const { x: ox, y: oy } = runGridOffsetRef.current;
-      const cam = cameraRef.current;
+      const baseCam = cameraRef.current;
+      const sim0 = simRef.current;
+      const shakeX = sim0?.shake.x ?? 0;
+      const shakeY = sim0?.shake.y ?? 0;
+      const cam: Camera = { x: baseCam.x + shakeX, y: baseCam.y + shakeY };
       const currentBlocks = blocksRef.current;
       const activeTypes = activeTypesRef.current;
       const zoom = currentZoomRef.current;
@@ -249,12 +275,22 @@ export default function Game() {
 
       const trail = trailRef.current;
       if (sim) {
-        drawBall(ctx, sim.ballBody.position.x, sim.ballBody.position.y, trail, cam);
+        drawBall(
+          ctx,
+          sim.ballBody.position.x,
+          sim.ballBody.position.y,
+          sim.ballBody.angle,
+          trail,
+          cam,
+        );
       }
 
       ctx.restore();
 
-      drawDistanceHUD(ctx, w, maxDistanceRef.current);
+      const v = sim?.ballBody.velocity;
+      const curSpeedMs = v ? Math.sqrt(v.x * v.x + v.y * v.y) * SPEED_TO_MS : 0;
+      const peakMs = (sim?.stats.peakSpeed ?? 0) * SPEED_TO_MS;
+      drawDistanceHUD(ctx, w, maxDistanceRef.current, curSpeedMs, peakMs);
 
       const poweredTypesInUse = [...new Set(
         currentBlocks
@@ -262,6 +298,8 @@ export default function Game() {
           .map((b) => b.type),
       )] as BlockType[];
       drawPoweredHUD(ctx, poweredTypesInUse, activeTypes);
+
+      drawMilestonePopups(ctx, milestonesRef.current, w, h);
     };
 
     const loop = () => {
@@ -274,11 +312,17 @@ export default function Game() {
 
         const curMode = modeRef.current;
 
-        const targetZoom = curMode === 'edit' ? editZoomRef.current : 1;
-        currentZoomRef.current += (targetZoom - currentZoomRef.current) * 0.08;
-        if (Math.abs(currentZoomRef.current - targetZoom) < 0.001) {
-          currentZoomRef.current = targetZoom;
+        if (curMode === 'edit') {
+          const targetZoom = editZoomRef.current;
+          currentZoomRef.current += (targetZoom - currentZoomRef.current) * 0.08;
+          if (Math.abs(currentZoomRef.current - targetZoom) < 0.001) {
+            currentZoomRef.current = targetZoom;
+          }
+        } else if (curMode === 'results') {
+          // settle to 1 when results
+          currentZoomRef.current += (1 - currentZoomRef.current) * 0.06;
         }
+        // running-mode zoom is driven by ball speed below.
 
         if (curMode === 'edit') {
           renderEdit(w, h);
@@ -286,14 +330,25 @@ export default function Game() {
           const sim = simRef.current;
           if (sim && curMode === 'running') {
             const ballBody = sim.ballBody;
-            const targetX = ballBody.position.x - w / 2;
-            const targetY = ballBody.position.y - h / 2;
+
+            // --- Speed-adaptive zoom ---
+            const v = ballBody.velocity;
+            const speedNow = Math.sqrt(v.x * v.x + v.y * v.y);
+            const [zsMin, zsMax] = CAMERA_ZOOM_SPEED_RANGE;
+            const t = Math.max(0, Math.min(1, (speedNow - zsMin) / (zsMax - zsMin)));
+            const targetCamZoom = CAMERA_ZOOM_MAX + (CAMERA_ZOOM_MIN - CAMERA_ZOOM_MAX) * t;
+            currentZoomRef.current += (targetCamZoom - currentZoomRef.current) * 0.04;
+
+            // --- Camera follow with shake offset ---
+            const zoom = currentZoomRef.current;
+            const targetX = ballBody.position.x - (w / zoom) / 2;
+            const targetY = ballBody.position.y - (h / zoom) / 2;
             cameraRef.current.x += (targetX - cameraRef.current.x) * CAMERA_LERP;
             cameraRef.current.y += (targetY - cameraRef.current.y) * CAMERA_LERP;
-            cameraRef.current.y = Math.max(cameraRef.current.y, -100);
+            cameraRef.current.y = Math.max(cameraRef.current.y, -200);
 
             trailRef.current.push({ x: ballBody.position.x, y: ballBody.position.y });
-            if (trailRef.current.length > 40) trailRef.current.shift();
+            if (trailRef.current.length > 50) trailRef.current.shift();
 
             const { x: ox, y: oy } = runGridOffsetRef.current;
 
@@ -306,19 +361,57 @@ export default function Game() {
 
             const distPx = ballBody.position.x - (ox + BUILD_WIDTH);
             const dist = Math.max(0, Math.round((distPx / CELL_SIZE) * 10) / 10);
-            maxDistanceRef.current = Math.max(maxDistanceRef.current, dist);
+            const prevMax = maxDistanceRef.current;
+            maxDistanceRef.current = Math.max(prevMax, dist);
 
-            const spd = Math.sqrt(ballBody.velocity.x ** 2 + ballBody.velocity.y ** 2);
-            if (spd < VELOCITY_THRESHOLD) {
+            // Milestone callouts when we cross a threshold
+            MILESTONES.forEach((m) => {
+              if (prevMax < m && maxDistanceRef.current >= m && !milestonesHitRef.current.has(m)) {
+                milestonesHitRef.current.add(m);
+                milestonesRef.current.push({ value: m, frame: 0 });
+              }
+            });
+            milestonesRef.current.forEach((p) => { p.frame++; });
+            milestonesRef.current = milestonesRef.current.filter((p) => p.frame < 90);
+
+            // Stuck detection (position barely changes)
+            const lp = lastPosRef.current;
+            if (lp) {
+              const dx2 = ballBody.position.x - lp.x;
+              const dy2 = ballBody.position.y - lp.y;
+              if (Math.sqrt(dx2 * dx2 + dy2 * dy2) < STUCK_POSITION_DELTA_PX) {
+                stuckFramesRef.current++;
+              } else {
+                stuckFramesRef.current = 0;
+                lastPosRef.current = { x: ballBody.position.x, y: ballBody.position.y };
+              }
+            } else {
+              lastPosRef.current = { x: ballBody.position.x, y: ballBody.position.y };
+            }
+
+            if (speedNow < VELOCITY_THRESHOLD) {
               stillFramesRef.current++;
             } else {
               stillFramesRef.current = 0;
             }
 
-            const belowFloor = ballBody.position.y > oy + BUILD_HEIGHT + 200;
+            runFramesRef.current++;
 
-            if (stillFramesRef.current >= STILL_FRAMES_REQUIRED || belowFloor || captured) {
+            // Floor is 400px thick + extends to ~5M px right; ball can only ever be
+            // "below floor" via a physics escape — treat 600px past build base as fatal.
+            const belowFloor = ballBody.position.y > oy + BUILD_HEIGHT + 600;
+            const stillDone = stillFramesRef.current >= STILL_FRAMES_REQUIRED;
+            const stuckDone = stuckFramesRef.current >= STUCK_FRAMES_REQUIRED && speedNow < 2;
+            const timedOut = runFramesRef.current >= RUN_MAX_FRAMES;
+
+            if (stillDone || stuckDone || timedOut || belowFloor || captured) {
               const finalDist = captured ? 0 : maxDistanceRef.current;
+              setLastRunStats({
+                peakMs: sim.stats.peakSpeed * SPEED_TO_MS,
+                seconds: runFramesRef.current / 60,
+                bounces: sim.stats.bounces,
+                blocks: blocksRef.current.filter((b) => b.type !== 'ball').length,
+              });
               stopSim(sim);
               simRef.current = null;
 
@@ -355,6 +448,41 @@ export default function Game() {
 
   // --- ACTIONS ---
 
+  const [shareModal, setShareModal] = useState<null | 'export' | 'import'>(null);
+  const [showTemplates, setShowTemplates] = useState(false);
+
+  const snapshot = useCallback(() => {
+    undoStackRef.current.push({ blocks: blocksRef.current, coins: coinsRef.current });
+    if (undoStackRef.current.length > 50) undoStackRef.current.shift();
+    redoStackRef.current = [];
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    const prev = undoStackRef.current.pop();
+    if (!prev) return;
+    redoStackRef.current.push({ blocks: blocksRef.current, coins: coinsRef.current });
+    setBlocks(prev.blocks);
+    setCoins(prev.coins);
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    const next = redoStackRef.current.pop();
+    if (!next) return;
+    undoStackRef.current.push({ blocks: blocksRef.current, coins: coinsRef.current });
+    setBlocks(next.blocks);
+    setCoins(next.coins);
+  }, []);
+
+  const handleLoadTemplate = useCallback((id: string) => {
+    const tpl = TEMPLATES.find((t) => t.id === id);
+    if (!tpl) return;
+    snapshot();
+    setBlocks(tpl.blocks.map((b) => ({ ...b })));
+    setCoins(STARTING_COINS);
+    setShowTemplates(false);
+    setShowIntro(false);
+  }, [snapshot]);
+
   const handleRun = useCallback(() => {
     if (!ballPlacedRef.current) return;
     const { x: ox, y: oy } = runGridOffsetRef.current;
@@ -362,7 +490,12 @@ export default function Game() {
     if (!sim) return;
     simRef.current = sim;
     stillFramesRef.current = 0;
+    stuckFramesRef.current = 0;
+    runFramesRef.current = 0;
+    lastPosRef.current = null;
     maxDistanceRef.current = 0;
+    milestonesRef.current = [];
+    milestonesHitRef.current = new Set();
     cameraRef.current = { x: 0, y: 0 };
     trailRef.current = [];
     activeTypesRef.current = new Set();
@@ -392,6 +525,7 @@ export default function Game() {
     cameraRef.current = { x: 0, y: 0 };
     activeTypesRef.current = new Set();
     heldKeysRef.current = new Set();
+    snapshot();
     setBlocks([]);
     setCoins(STARTING_COINS);
     setSelectedBlock(null);
@@ -399,7 +533,7 @@ export default function Game() {
     setCurrentDistance(0);
     setSpeed(1);
     setPreRotation(0);
-  }, []);
+  }, [snapshot]);
 
   const handleSpeedToggle = useCallback(() => {
     setSpeed((s) => {
@@ -411,7 +545,6 @@ export default function Game() {
     });
   }, []);
 
-  const [shareModal, setShareModal] = useState<null | 'export' | 'import'>(null);
   const [importText, setImportText] = useState('');
   const [importError, setImportError] = useState('');
 
@@ -466,6 +599,7 @@ export default function Game() {
           row: b.row,
           rotation: (((b.rotation | 0) % 4) + 4) % 4,
         }));
+      snapshot();
       setBlocks(cleaned);
       const incomingCoins = data.c ?? data.coins;
       if (typeof incomingCoins === 'number') setCoins(incomingCoins);
@@ -473,7 +607,7 @@ export default function Game() {
     } catch {
       setImportError('Invalid share code.');
     }
-  }, []);
+  }, [snapshot]);
 
   // --- CANVAS EVENTS ---
 
@@ -562,13 +696,14 @@ export default function Game() {
       const cell = getGridCell(e.clientX, e.clientY);
       if (!cell) return;
       lastPaintCellRef.current = `${cell.col},${cell.row}`;
+      snapshot();
       if (eraserRef.current) {
         eraseBlockAt(cell);
       } else {
         placeBlockAt(cell, true);
       }
     },
-    [getGridCell, placeBlockAt, eraseBlockAt],
+    [getGridCell, placeBlockAt, eraseBlockAt, snapshot],
   );
 
   const handleCanvasMouseUp = useCallback(() => {
@@ -588,6 +723,7 @@ export default function Game() {
       );
 
       if (existingBlock) {
+        snapshot();
         setBlocks((prev) =>
           prev.map((b) =>
             b.col === cell.col && b.row === cell.row
@@ -599,7 +735,7 @@ export default function Game() {
         setPreRotation((r) => (r + 1) % 4);
       }
     },
-    [getGridCell],
+    [getGridCell, snapshot],
   );
 
   const handleCanvasMouseMove = useCallback(
@@ -649,9 +785,21 @@ export default function Game() {
           return;
         }
 
+        if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
+          e.preventDefault();
+          handleUndo();
+          return;
+        }
+        if ((e.ctrlKey || e.metaKey) && ((e.key === 'y' || e.key === 'Y') || ((e.key === 'z' || e.key === 'Z') && e.shiftKey))) {
+          e.preventDefault();
+          handleRedo();
+          return;
+        }
+
         if (e.key === 'Delete' || e.key === 'Backspace') {
           const hover = hoverCellRef.current;
           if (!hover) return;
+          snapshot();
           setBlocks((prev) => {
             const idx = prev.findIndex((b) => b.col === hover.col && b.row === hover.row);
             if (idx < 0) return prev;
@@ -716,7 +864,7 @@ export default function Game() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [handleSpeedToggle, handleBackToEdit]);
+  }, [handleSpeedToggle, handleBackToEdit, handleUndo, handleRedo, snapshot]);
 
   // --- SIDEBAR ---
 
@@ -810,19 +958,25 @@ export default function Game() {
         </div>
 
         <div className="mt-auto pt-3 border-t border-white/5">
+          <button
+            onClick={() => setShowTemplates(true)}
+            className="w-full px-3 py-2.5 mb-2 rounded-lg text-[11px] font-bold tracking-wide bg-gradient-to-r from-[#e94560]/30 to-[#7c4dff]/30 text-white hover:from-[#e94560]/50 hover:to-[#7c4dff]/50 cursor-pointer border border-white/10 transition-all"
+          >
+            ✨ Load Example
+          </button>
           <div className="flex gap-2 mb-3">
             <button
               onClick={handleExport}
               disabled={blocks.length === 0}
               className="flex-1 px-3 py-2 rounded-lg text-[10px] font-semibold bg-white/5 text-gray-400 hover:bg-white/10 hover:text-gray-300 cursor-pointer border border-white/5 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
             >
-              Export
+              Share code
             </button>
             <button
               onClick={handleImport}
               className="flex-1 px-3 py-2 rounded-lg text-[10px] font-semibold bg-white/5 text-gray-400 hover:bg-white/10 hover:text-gray-300 cursor-pointer border border-white/5 transition-all"
             >
-              Import
+              Load code
             </button>
           </div>
           <div className="text-[10px] text-gray-600 leading-relaxed space-y-0.5">
@@ -831,6 +985,7 @@ export default function Game() {
             <div>Right-click: Rotate</div>
             <div>E: Eraser (drag to delete)</div>
             <div>Del: Remove single</div>
+            <div>Ctrl+Z / Ctrl+Y: Undo / Redo</div>
             <div className="text-gray-700 mt-1">Sim: Hold 1-5 for powered · Space speed · R stop</div>
           </div>
         </div>
@@ -925,26 +1080,72 @@ export default function Game() {
           {/* Results overlay */}
           {mode === 'results' && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-              <div className="bg-gradient-to-b from-[#16213e] to-[#111d35] border border-[#1a3a6e]/50 rounded-2xl p-10 text-center shadow-[0_20px_60px_rgba(0,0,0,0.5)] min-w-[320px]">
-                <div className="text-5xl mb-4">🏆</div>
+              <div className="bg-gradient-to-b from-[#16213e] to-[#111d35] border border-[#1a3a6e]/50 rounded-2xl p-9 text-center shadow-[0_20px_60px_rgba(0,0,0,0.5)] min-w-[380px]">
+                <div className="text-5xl mb-3">{currentDistance >= bestDistance && currentDistance > 0 ? '🏆' : currentDistance > 0 ? '✨' : '💥'}</div>
                 <div className="text-[10px] text-gray-500 uppercase tracking-[0.2em] mb-1">Distance</div>
-                <h2 className="text-4xl font-extrabold text-white mb-1">
+                <h2 className="text-5xl font-extrabold text-white mb-1 tracking-tight">
                   {currentDistance.toFixed(1)}<span className="text-lg text-gray-400 ml-1">m</span>
                 </h2>
                 {currentDistance >= bestDistance && currentDistance > 0 ? (
-                  <p className="text-yellow-400 text-sm mb-8 font-semibold">New personal best!</p>
+                  <p className="text-yellow-400 text-sm mb-6 font-semibold tracking-wide">★ New personal best ★</p>
                 ) : (
-                  <p className="text-gray-500 text-sm mb-8">
-                    Best: {bestDistance.toFixed(1)}m
+                  <p className="text-gray-500 text-sm mb-6">
+                    Best: <span className="text-yellow-400/80">{bestDistance.toFixed(1)}m</span>
                   </p>
                 )}
+
+                {/* Stats grid */}
+                <div className="grid grid-cols-3 gap-3 mb-7">
+                  <div className="bg-white/5 rounded-lg py-2.5">
+                    <div className="text-[9px] text-gray-500 uppercase tracking-wider">Peak Speed</div>
+                    <div className="text-base font-bold text-cyan-300 mt-0.5">{lastRunStats.peakMs.toFixed(0)}<span className="text-[10px] text-gray-500 ml-0.5">m/s</span></div>
+                  </div>
+                  <div className="bg-white/5 rounded-lg py-2.5">
+                    <div className="text-[9px] text-gray-500 uppercase tracking-wider">Run Time</div>
+                    <div className="text-base font-bold text-emerald-300 mt-0.5">{lastRunStats.seconds.toFixed(1)}<span className="text-[10px] text-gray-500 ml-0.5">s</span></div>
+                  </div>
+                  <div className="bg-white/5 rounded-lg py-2.5">
+                    <div className="text-[9px] text-gray-500 uppercase tracking-wider">Blocks</div>
+                    <div className="text-base font-bold text-fuchsia-300 mt-0.5">{lastRunStats.blocks}</div>
+                  </div>
+                </div>
+
                 <button
                   onClick={handleBackToEdit}
                   className="px-14 py-4 rounded-xl font-bold bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_16px_rgba(16,185,129,0.3)] cursor-pointer text-lg transition-all"
                 >
                   ← Edit
                 </button>
-                <div className="text-[10px] text-gray-600 mt-4">Press R or Esc</div>
+                <div className="text-[10px] text-gray-600 mt-3">Press R or Esc</div>
+              </div>
+            </div>
+          )}
+
+          {/* Templates modal */}
+          {showTemplates && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-md z-20">
+              <div className="bg-gradient-to-b from-[#16213e] to-[#111d35] border border-[#1a3a6e]/50 rounded-2xl p-7 shadow-[0_20px_60px_rgba(0,0,0,0.5)] w-[640px] max-w-[92vw]">
+                <div className="flex items-center justify-between mb-1">
+                  <h3 className="text-lg font-bold text-white tracking-wide">Example builds</h3>
+                  <button
+                    onClick={() => setShowTemplates(false)}
+                    className="text-gray-400 hover:text-white text-xl leading-none w-6 h-6 flex items-center justify-center"
+                  >×</button>
+                </div>
+                <p className="text-xs text-gray-500 mb-4">Loading one will replace your current build (undo with Ctrl+Z).</p>
+                <div className="grid grid-cols-2 gap-3">
+                  {TEMPLATES.map((tpl) => (
+                    <button
+                      key={tpl.id}
+                      onClick={() => handleLoadTemplate(tpl.id)}
+                      className="text-left p-4 rounded-xl bg-gradient-to-br from-[#0f3460] to-[#0d2b52] hover:from-[#1a4682] hover:to-[#143368] border border-white/5 hover:border-[#e94560]/50 cursor-pointer transition-all"
+                    >
+                      <div className="text-base font-bold text-white mb-1">{tpl.name}</div>
+                      <div className="text-[11px] text-gray-400 leading-snug">{tpl.blurb}</div>
+                      <div className="text-[10px] text-gray-600 mt-2">{tpl.blocks.length} blocks</div>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           )}
@@ -1042,12 +1243,20 @@ export default function Game() {
                   <span className="text-sm text-yellow-400 font-bold">Distance!</span>
                 </div>
 
-                <button
-                  onClick={() => setShowIntro(false)}
-                  className="px-16 py-5 rounded-2xl font-bold bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_20px_rgba(16,185,129,0.3)] cursor-pointer text-xl tracking-wide transition-all"
-                >
-                  Play
-                </button>
+                <div className="flex flex-col gap-2 items-center">
+                  <button
+                    onClick={() => setShowIntro(false)}
+                    className="px-16 py-4 rounded-2xl font-bold bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_20px_rgba(16,185,129,0.3)] cursor-pointer text-xl tracking-wide transition-all"
+                  >
+                    Build from scratch
+                  </button>
+                  <button
+                    onClick={() => { setShowIntro(false); setShowTemplates(true); }}
+                    className="px-12 py-2.5 rounded-xl font-semibold text-sm bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 cursor-pointer transition-all"
+                  >
+                    ✨ Start from an example
+                  </button>
+                </div>
               </div>
             </div>
           )}

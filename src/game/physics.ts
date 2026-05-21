@@ -36,6 +36,7 @@ import {
   PHYSICS_DT,
   SUBSTEPS_PER_FRAME,
   MAX_BALL_SPEED,
+  SHAKE_DECAY,
   BlockType,
 } from './constants';
 import { PlacedBlock } from './types';
@@ -108,6 +109,12 @@ export function createPhysicsBody(block: PlacedBlock, offsetX: number, offsetY: 
   }
 }
 
+export interface SimulationStats {
+  peakSpeed: number;     // px/substep (display via SPEED_TO_MS)
+  bounces: number;       // ball-vs-anything collision count
+  frames: number;        // total render frames since start
+}
+
 export interface SimulationState {
   engine: Matter.Engine;
   ballBody: Matter.Body;
@@ -121,6 +128,8 @@ export interface SimulationState {
   speedScale: number;
   ox: number;
   oy: number;
+  stats: SimulationStats;
+  shake: { x: number; y: number; intensity: number };
 }
 
 function blockKey(block: PlacedBlock): string {
@@ -209,6 +218,8 @@ export function startSimulation(
     speedScale: 1,
     ox,
     oy,
+    stats: { peakSpeed: 0, bounces: 0, frames: 0 },
+    shake: { x: 0, y: 0, intensity: 0 },
   };
 
   // Curve redirect handler (smoother + speed-preserving)
@@ -299,6 +310,15 @@ export function startSimulation(
         y: boosterBody.position.y,
         frame: 0,
       });
+      sim.shake.intensity = Math.max(sim.shake.intensity, 6);
+    });
+  });
+
+  // Ball bounce counter (any contact)
+  Events.on(engine, 'collisionStart', (event) => {
+    event.pairs.forEach((pair) => {
+      const isBall = pair.bodyA.label === 'ball' || pair.bodyB.label === 'ball';
+      if (isBall) sim.stats.bounces++;
     });
   });
 
@@ -334,15 +354,28 @@ export function stopSimulation(sim: SimulationState) {
 // Step physics manually with substeps & speed clamp to prevent tunneling.
 export function stepSimulation(sim: SimulationState) {
   const substeps = SUBSTEPS_PER_FRAME;
-  // engine.timing.timeScale lets us speed up sim without losing precision
-  // because we run more substeps when speed > 1.
   const scale = sim.speedScale;
   const totalSubsteps = Math.max(1, Math.round(substeps * scale));
   for (let i = 0; i < totalSubsteps; i++) {
     clampBallSpeed(sim.ballBody);
     Engine.update(sim.engine, PHYSICS_DT);
+    const v = sim.ballBody.velocity;
+    const s = Math.sqrt(v.x * v.x + v.y * v.y);
+    if (s > sim.stats.peakSpeed) sim.stats.peakSpeed = s;
   }
   clampBallSpeed(sim.ballBody);
+  sim.stats.frames++;
+
+  // Shake decay + jitter sample
+  if (sim.shake.intensity > 0.1) {
+    sim.shake.x = (Math.random() - 0.5) * sim.shake.intensity * 2;
+    sim.shake.y = (Math.random() - 0.5) * sim.shake.intensity * 2;
+    sim.shake.intensity *= SHAKE_DECAY;
+  } else {
+    sim.shake.intensity = 0;
+    sim.shake.x = 0;
+    sim.shake.y = 0;
+  }
 }
 
 export function setSimulationSpeed(sim: SimulationState, speed: number) {
@@ -534,6 +567,7 @@ export function applyBlockEffects(
         }
         removedBombs.add(key);
         sim.shockwaves.push({ x: bcx, y: bcy, frame: 0 });
+        sim.shake.intensity = Math.max(sim.shake.intensity, 18);
         break;
       }
     }
