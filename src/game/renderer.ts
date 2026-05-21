@@ -862,42 +862,67 @@ export function drawPoweredHUD(
   ctx.save();
   const hudX = 16;
   const hudY = 16;
-  const chipW = 44;
-  const chipH = 28;
-  const gap = 4;
-  const totalW = poweredTypes.length * (chipW + gap) - gap + 16;
+  const chipW = 60;
+  const chipH = 60;
+  const gap = 6;
+  const headerH = 14;
+  const totalW = poweredTypes.length * (chipW + gap) - gap + 18;
+  const totalH = chipH + headerH + 16;
 
-  ctx.fillStyle = 'rgba(15, 52, 96, 0.85)';
+  // panel
+  ctx.fillStyle = 'rgba(10, 18, 38, 0.86)';
   ctx.beginPath();
-  ctx.roundRect(hudX, hudY, totalW, chipH + 16, 8);
+  ctx.roundRect(hudX, hudY, totalW, totalH, 10);
   ctx.fill();
+  ctx.strokeStyle = 'rgba(255, 215, 0, 0.18)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(hudX, hudY, totalW, totalH, 10);
+  ctx.stroke();
 
-  ctx.font = 'bold 8px sans-serif';
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = 'bold 9px sans-serif';
+  ctx.fillStyle = 'rgba(255, 215, 0, 0.55)';
   ctx.textAlign = 'left';
-  ctx.fillText('HOLD KEY', hudX + 6, hudY + 10);
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText('HOLD A KEY', hudX + 10, hudY + 14);
 
   poweredTypes.forEach((type, i) => {
-    const gx = hudX + 8 + i * (chipW + gap);
-    const gy = hudY + 16;
+    const gx = hudX + 9 + i * (chipW + gap);
+    const gy = hudY + headerH + 8;
     const active = activeTypes.has(type);
     const keyLabel = POWERED_TYPE_KEY[type];
     const config = BLOCK_CONFIGS[type];
 
-    ctx.fillStyle = active ? 'rgba(255, 215, 0, 0.8)' : 'rgba(255,255,255,0.15)';
+    // chip background
+    if (active) {
+      // gold glow
+      const grad = ctx.createLinearGradient(gx, gy, gx, gy + chipH);
+      grad.addColorStop(0, 'rgba(255, 220, 90, 0.95)');
+      grad.addColorStop(1, 'rgba(255, 170, 0, 0.85)');
+      ctx.fillStyle = grad;
+    } else {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.06)';
+    }
     ctx.beginPath();
-    ctx.roundRect(gx, gy, chipW, chipH - 6, 4);
+    ctx.roundRect(gx, gy, chipW, chipH, 8);
     ctx.fill();
+    ctx.strokeStyle = active ? 'rgba(255, 255, 255, 0.6)' : config.color + '88';
+    ctx.lineWidth = active ? 2 : 1.5;
+    ctx.beginPath();
+    ctx.roundRect(gx, gy, chipW, chipH, 8);
+    ctx.stroke();
 
-    ctx.fillStyle = active ? '#000' : 'rgba(255,255,255,0.7)';
-    ctx.font = 'bold 10px sans-serif';
+    // big key letter
+    ctx.fillStyle = active ? '#1a0e00' : '#fff';
+    ctx.font = 'bold 22px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(`${keyLabel}`, gx + 10, gy + (chipH - 6) / 2);
+    ctx.fillText(keyLabel.toUpperCase(), gx + chipW / 2, gy + 22);
 
-    ctx.fillStyle = active ? '#000' : 'rgba(255,255,255,0.4)';
-    ctx.font = '8px sans-serif';
-    ctx.fillText(config.name.slice(0, 5), gx + 32, gy + (chipH - 6) / 2);
+    // block name underneath
+    ctx.fillStyle = active ? 'rgba(26, 14, 0, 0.85)' : 'rgba(255,255,255,0.65)';
+    ctx.font = 'bold 9px sans-serif';
+    ctx.fillText(config.name.toUpperCase(), gx + chipW / 2, gy + chipH - 12);
   });
 
   ctx.restore();

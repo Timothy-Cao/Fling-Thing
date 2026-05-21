@@ -31,6 +31,7 @@ import {
 } from '@/game/constants';
 import { PlacedBlock, GameMode, Camera } from '@/game/types';
 import { TEMPLATES } from '@/game/templates';
+import { sanitizeBlocks, encodeShareCode, decodeShareCode } from '@/game/shareCode';
 import {
   drawBlockShape,
   drawPlacedBlock,
@@ -103,7 +104,10 @@ export default function Game() {
 
   const [blocks, setBlocks] = useState<PlacedBlock[]>(() => {
     if (typeof window === 'undefined') return [];
-    try { const s = localStorage.getItem('fling-blocks'); return s ? JSON.parse(s) : []; } catch { return []; }
+    try {
+      const s = localStorage.getItem('fling-blocks');
+      return s ? sanitizeBlocks(JSON.parse(s)) : [];
+    } catch { return []; }
   });
   const [coins, setCoins] = useState(() => {
     if (typeof window === 'undefined') return STARTING_COINS;
@@ -124,6 +128,8 @@ export default function Game() {
     peakMs: 0, seconds: 0, bounces: 0, blocks: 0,
   });
   const [poweredHint, setPoweredHint] = useState(false);
+  const [undoCount, setUndoCount] = useState(0);
+  const [redoCount, setRedoCount] = useState(0);
   const [showIntro, setShowIntro] = useState(() => {
     if (typeof window === 'undefined') return true;
     return !localStorage.getItem('fling-blocks');
@@ -228,14 +234,57 @@ export default function Game() {
         const hx = ox + hover.col * CELL_SIZE;
         const hy = oy + hover.row * CELL_SIZE;
         const occupied = currentBlocks.some((b) => b.col === hover.col && b.row === hover.row);
-        const canAfford = selBlock === 'ball' ? !isBallPlaced : curCoins >= getBlockCost(selBlock, currentBlocks);
+        const placementCost = selBlock === 'ball' ? 0 : getBlockCost(selBlock, currentBlocks);
+        const canAfford = selBlock === 'ball' ? !isBallPlaced : curCoins >= placementCost;
         const valid = !occupied && canAfford && (selBlock !== 'ball' || !isBallPlaced);
 
         if (valid) {
           drawBlockShape(ctx, selBlock, hx, hy, preRotationRef.current, 0.4);
+          // Floating cost badge
+          if (selBlock !== 'ball') {
+            const label = placementCost === 0 ? 'free' : `${placementCost}🪙`;
+            const padX = 6;
+            ctx.font = 'bold 11px sans-serif';
+            const tw = ctx.measureText(label).width + padX * 2;
+            const bx = hx + CELL_SIZE - tw + 6;
+            const by = hy - 6;
+            ctx.fillStyle = placementCost === 0 ? 'rgba(46, 204, 113, 0.95)' : 'rgba(15, 25, 50, 0.92)';
+            ctx.beginPath();
+            ctx.roundRect(bx, by, tw, 18, 5);
+            ctx.fill();
+            ctx.strokeStyle = placementCost === 0 ? 'rgba(255,255,255,0.4)' : 'rgba(255, 215, 0, 0.45)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.roundRect(bx, by, tw, 18, 5);
+            ctx.stroke();
+            ctx.fillStyle = placementCost === 0 ? '#fff' : '#ffd700';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, bx + tw / 2, by + 9);
+          }
         } else {
           ctx.fillStyle = COLORS.hoverInvalid;
           ctx.fillRect(hx, hy, CELL_SIZE, CELL_SIZE);
+          if (!canAfford && selBlock !== 'ball') {
+            ctx.fillStyle = 'rgba(15, 25, 50, 0.92)';
+            const label = `need ${placementCost}🪙`;
+            ctx.font = 'bold 10px sans-serif';
+            const tw = ctx.measureText(label).width + 12;
+            const bx = hx + CELL_SIZE - tw + 6;
+            const by = hy - 6;
+            ctx.beginPath();
+            ctx.roundRect(bx, by, tw, 18, 5);
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(231, 76, 60, 0.6)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.roundRect(bx, by, tw, 18, 5);
+            ctx.stroke();
+            ctx.fillStyle = '#ff8a80';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, bx + tw / 2, by + 9);
+          }
         }
       }
 
@@ -478,6 +527,8 @@ export default function Game() {
     undoStackRef.current.push({ blocks: blocksRef.current, coins: coinsRef.current });
     if (undoStackRef.current.length > 50) undoStackRef.current.shift();
     redoStackRef.current = [];
+    setUndoCount(undoStackRef.current.length);
+    setRedoCount(0);
   }, []);
 
   const handleUndo = useCallback(() => {
@@ -486,6 +537,8 @@ export default function Game() {
     redoStackRef.current.push({ blocks: blocksRef.current, coins: coinsRef.current });
     setBlocks(prev.blocks);
     setCoins(prev.coins);
+    setUndoCount(undoStackRef.current.length);
+    setRedoCount(redoStackRef.current.length);
   }, []);
 
   const handleRedo = useCallback(() => {
@@ -494,6 +547,8 @@ export default function Game() {
     undoStackRef.current.push({ blocks: blocksRef.current, coins: coinsRef.current });
     setBlocks(next.blocks);
     setCoins(next.coins);
+    setUndoCount(undoStackRef.current.length);
+    setRedoCount(redoStackRef.current.length);
   }, []);
 
   const handleLoadTemplate = useCallback((id: string) => {
@@ -585,12 +640,7 @@ export default function Game() {
   const [copyToast, setCopyToast] = useState<string | null>(null);
   const handleCopyResult = useCallback(async () => {
     try {
-      const payload = { v: 2, b: blocksRef.current, c: coinsRef.current };
-      const json = JSON.stringify(payload);
-      const bytes = new TextEncoder().encode(json);
-      let bin = '';
-      bytes.forEach((b) => { bin += String.fromCharCode(b); });
-      const code = 'FT2|' + btoa(bin).replace(/=+$/, '');
+      const code = encodeShareCode(blocksRef.current, coinsRef.current);
       const msg = `🚀 I flung it ${currentDistance.toFixed(1)}m in Fling Thing! Try my build:\n${code}`;
       await navigator.clipboard.writeText(msg);
       setCopyToast('Copied result + build to clipboard');
@@ -616,14 +666,7 @@ export default function Game() {
 
   const exportedCode = (() => {
     if (shareModal !== 'export') return '';
-    try {
-      const payload = { v: 2, b: blocks, c: coins };
-      const json = JSON.stringify(payload);
-      const bytes = new TextEncoder().encode(json);
-      let bin = '';
-      bytes.forEach((b) => { bin += String.fromCharCode(b); });
-      return 'FT2|' + btoa(bin).replace(/=+$/, '');
-    } catch { return ''; }
+    return encodeShareCode(blocks, coins);
   })();
 
   const handleExport = useCallback(() => {
@@ -639,40 +682,15 @@ export default function Game() {
   const applyImport = useCallback((raw: string) => {
     const code = raw.trim();
     if (!code) { setImportError('Paste a code first.'); return; }
-    try {
-      // accept FT2|<base64> or raw JSON
-      let json: string;
-      if (code.startsWith('FT2|')) {
-        const b64 = code.slice(4) + '='.repeat((4 - (code.length - 4) % 4) % 4);
-        const bin = atob(b64);
-        const bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        json = new TextDecoder().decode(bytes);
-      } else {
-        json = code;
-      }
-      const data = JSON.parse(json);
-      const incoming = data.b ?? data.blocks;
-      if (!Array.isArray(incoming)) throw new Error('no blocks');
-      // sanitize
-      const validTypes = BLOCK_TYPES as readonly string[];
-      const cleaned: PlacedBlock[] = incoming
-        .filter((b: { col: unknown; row: unknown }) =>
-          b && typeof b.col === 'number' && typeof b.row === 'number')
-        .map((b: { type: string; col: number; row: number; rotation: number }) => ({
-          type: (validTypes.includes(b.type) ? b.type : 'solid') as BlockType,
-          col: b.col,
-          row: b.row,
-          rotation: (((b.rotation | 0) % 4) + 4) % 4,
-        }));
-      snapshot();
-      setBlocks(cleaned);
-      const incomingCoins = data.c ?? data.coins;
-      if (typeof incomingCoins === 'number') setCoins(incomingCoins);
-      setShareModal(null);
-    } catch {
+    const decoded = decodeShareCode(code);
+    if (!decoded || decoded.blocks.length === 0) {
       setImportError('Invalid share code.');
+      return;
     }
+    snapshot();
+    setBlocks(decoded.blocks);
+    setCoins(decoded.coins);
+    setShareModal(null);
   }, [snapshot]);
 
   // --- CANVAS EVENTS ---
@@ -1081,7 +1099,7 @@ export default function Game() {
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Toolbar */}
-        <div className="h-[72px] bg-gradient-to-r from-[#16213e] to-[#141d33] border-b border-[#1a3a6e]/40 flex items-center px-6 gap-5">
+        <div className="h-[72px] bg-gradient-to-r from-[#16213e] to-[#141d33] border-b border-[#1a3a6e]/40 flex items-center px-6 gap-3">
           {mode === 'edit' && (
             <>
               <button
@@ -1095,12 +1113,47 @@ export default function Game() {
               >
                 ▶ Run
               </button>
+
+              {/* Undo / Redo cluster */}
+              <div className="flex items-center bg-white/5 rounded-xl border border-white/5 overflow-hidden">
+                <button
+                  onClick={handleUndo}
+                  disabled={undoCount === 0}
+                  title="Undo (Ctrl+Z)"
+                  className="px-3 py-2.5 text-base text-gray-300 hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-all"
+                >↶</button>
+                <div className="w-px h-6 bg-white/10" />
+                <button
+                  onClick={handleRedo}
+                  disabled={redoCount === 0}
+                  title="Redo (Ctrl+Y)"
+                  className="px-3 py-2.5 text-base text-gray-300 hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-all"
+                >↷</button>
+              </div>
+
               <button
                 onClick={handleReset}
-                className="px-8 py-3.5 rounded-xl font-semibold text-base bg-[#e94560]/80 text-white hover:bg-[#e94560] transition-all cursor-pointer"
+                title="Clear everything (undoable with Ctrl+Z)"
+                className="px-4 py-2.5 rounded-xl font-semibold text-sm bg-white/5 text-gray-300 hover:bg-white/10 hover:text-red-300 border border-white/5 hover:border-red-400/40 transition-all cursor-pointer"
               >
-                ↺ Clear
+                ✕ Clear
               </button>
+
+              {/* Build summary chip */}
+              {blocks.length > 0 && (
+                <div className="flex items-center gap-4 bg-white/[0.04] border border-white/5 rounded-xl px-4 py-2 text-[11px]">
+                  <div>
+                    <div className="text-[9px] uppercase tracking-wider text-gray-500">Blocks</div>
+                    <div className="text-white font-bold text-sm leading-tight">{blocks.filter(b => b.type !== 'ball').length}</div>
+                  </div>
+                  <div className="w-px h-8 bg-white/10" />
+                  <div>
+                    <div className="text-[9px] uppercase tracking-wider text-gray-500">Spent</div>
+                    <div className="text-yellow-400/90 font-bold text-sm leading-tight">{STARTING_COINS - coins}🪙</div>
+                  </div>
+                </div>
+              )}
+
               {eraserMode && (
                 <span className="text-sm text-red-400 bg-red-400/10 px-4 py-2 rounded-lg border border-red-400/30 font-semibold">
                   Eraser (E)
@@ -1112,7 +1165,7 @@ export default function Game() {
                 </span>
               )}
               {!ballPlaced && !eraserMode && (
-                <span className="text-xs text-gray-500/80 ml-2">Place the ball to run</span>
+                <span className="text-xs text-yellow-400/80 ml-1 animate-pulse">⚠ Place the ball to run</span>
               )}
             </>
           )}
@@ -1241,8 +1294,14 @@ export default function Game() {
 
           {/* Templates modal */}
           {showTemplates && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-md z-20">
-              <div className="bg-gradient-to-b from-[#16213e] to-[#111d35] border border-[#1a3a6e]/50 rounded-2xl p-7 shadow-[0_20px_60px_rgba(0,0,0,0.5)] w-[640px] max-w-[92vw]">
+            <div
+              className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-md z-20"
+              onClick={() => setShowTemplates(false)}
+            >
+              <div
+                className="bg-gradient-to-b from-[#16213e] to-[#111d35] border border-[#1a3a6e]/50 rounded-2xl p-7 shadow-[0_20px_60px_rgba(0,0,0,0.5)] w-[640px] max-w-[92vw]"
+                onClick={(e) => e.stopPropagation()}
+              >
                 <div className="flex items-center justify-between mb-1">
                   <h3 className="text-lg font-bold text-white tracking-wide">Example builds</h3>
                   <button
@@ -1270,8 +1329,14 @@ export default function Game() {
 
           {/* Share modal */}
           {shareModal && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-md z-20">
-              <div className="bg-gradient-to-b from-[#16213e] to-[#111d35] border border-[#1a3a6e]/50 rounded-2xl p-7 shadow-[0_20px_60px_rgba(0,0,0,0.5)] w-[480px] max-w-[90vw]">
+            <div
+              className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-md z-20"
+              onClick={() => setShareModal(null)}
+            >
+              <div
+                className="bg-gradient-to-b from-[#16213e] to-[#111d35] border border-[#1a3a6e]/50 rounded-2xl p-7 shadow-[0_20px_60px_rgba(0,0,0,0.5)] w-[480px] max-w-[90vw]"
+                onClick={(e) => e.stopPropagation()}
+              >
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-lg font-bold text-white tracking-wide">
                     {shareModal === 'export' ? 'Share your build' : 'Load a build'}
