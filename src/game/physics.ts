@@ -37,6 +37,7 @@ import {
   SUBSTEPS_PER_FRAME,
   MAX_BALL_SPEED,
   SHAKE_DECAY,
+  GRID_ROWS,
   BlockType,
 } from './constants';
 import { PlacedBlock } from './types';
@@ -165,9 +166,28 @@ export interface SimulationStats {
   frames: number;        // total render frames since start
 }
 
+/**
+ * Per-block dynamic state during a simulation.
+ *
+ * `origKey` is the placement key from the build (immutable; used to index
+ * cooldown / removed maps). `col`/`row`/`rotation` reflect the block's
+ * *current* position, which can change at runtime (pistons push them).
+ * `body` is the static physics body that gets `Body.setPosition`-ed when
+ * the block is shoved.
+ */
+export interface DynBlock {
+  origKey: string;
+  type: BlockType;
+  col: number;
+  row: number;
+  rotation: number;
+  body: Matter.Body | null;
+}
+
 export interface SimulationState {
   engine: Matter.Engine;
   ballBody: Matter.Body;
+  dynBlocks: DynBlock[];
   pistonArms: Map<string, Matter.Body>;
   removedBombs: Set<string>;
   portalCooldown: number;
@@ -180,10 +200,6 @@ export interface SimulationState {
   oy: number;
   stats: SimulationStats;
   shake: { x: number; y: number; intensity: number };
-}
-
-function blockKey(block: PlacedBlock): string {
-  return `${block.col},${block.row}`;
 }
 
 // INVARIANT: MAX_BALL_SPEED must remain < CELL_SIZE so even a bouncy block's
@@ -255,12 +271,19 @@ export function startSimulation(
   });
   bodiesToAdd.push(ballBody);
 
+  const dynBlocks: DynBlock[] = [];
   blocks.forEach((block) => {
     if (block.type === 'ball') return;
     const body = createPhysicsBody(block, ox, oy);
-    if (body) {
-      bodiesToAdd.push(body);
-    }
+    if (body) bodiesToAdd.push(body);
+    dynBlocks.push({
+      origKey: `${block.col},${block.row}`,
+      type: block.type,
+      col: block.col,
+      row: block.row,
+      rotation: block.rotation,
+      body,
+    });
   });
 
   World.add(engine.world, bodiesToAdd);
@@ -268,6 +291,7 @@ export function startSimulation(
   const sim: SimulationState = {
     engine,
     ballBody,
+    dynBlocks,
     pistonArms: new Map(),
     removedBombs: new Set(),
     portalCooldown: 0,
@@ -420,13 +444,75 @@ export function setSimulationSpeed(sim: SimulationState, speed: number) {
   sim.speedScale = speed;
 }
 
+const PISTON_PUSH_MAX_CHAIN = 12;
+
+/**
+ * Shove the row of blocks sitting in front of `piston` one cell along
+ * (`dx`, `dy`). Used when a piston transitions from inactive -> active.
+ *
+ * Rules:
+ *   - Stops walking when it hits an empty cell (that's where the chain
+ *     will end up).
+ *   - Refuses to push another piston (avoids tangled chain interactions
+ *     when both have arms extended).
+ *   - Refuses to push blocks off the top of the grid or down into the
+ *     floor (those would clip into the world bodies).
+ *   - Off the right or left edge of the *build grid* is allowed — the
+ *     world extends well beyond it in both directions.
+ *   - Capped at PISTON_PUSH_MAX_CHAIN for sanity.
+ */
+function pistonPushChain(
+  sim: SimulationState,
+  piston: DynBlock,
+  dx: number,
+  dy: number,
+) {
+  const chain: DynBlock[] = [];
+  let cx = piston.col + dx;
+  let cy = piston.row + dy;
+  while (true) {
+    const at = sim.dynBlocks.find(
+      (d) => d !== piston && d.col === cx && d.row === cy
+        && !(d.type === 'bomb' && sim.removedBombs.has(d.origKey)),
+    );
+    if (!at) break;
+    if (at.type === 'piston') return;
+    chain.push(at);
+    cx += dx;
+    cy += dy;
+    if (chain.length > PISTON_PUSH_MAX_CHAIN) return;
+  }
+  if (chain.length === 0) return;
+
+  // Reject the push if anything would clip into the floor or ceiling.
+  for (const b of chain) {
+    const newRow = b.row + dy;
+    if (newRow < 0 || newRow >= GRID_ROWS) return;
+  }
+
+  // Shift in reverse so the leading block clears its cell before the next
+  // one slides in (no overlapping intermediate positions).
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const b = chain[i];
+    b.col += dx;
+    b.row += dy;
+    if (b.body) {
+      Body.setPosition(b.body, {
+        x: sim.ox + b.col * CELL_SIZE + CELL_SIZE / 2,
+        y: sim.oy + b.row * CELL_SIZE + CELL_SIZE / 2,
+      });
+    }
+  }
+}
+
 export function applyBlockEffects(
   sim: SimulationState,
   activeTypes: Set<BlockType>,
-  blocks: PlacedBlock[],
+  _blocks: PlacedBlock[],   // legacy param; we iterate sim.dynBlocks now
   ox: number,
   oy: number,
 ): boolean {
+  void _blocks;
   const { engine, ballBody, pistonArms, removedBombs } = sim;
 
   if (sim.portalCooldown > 0) sim.portalCooldown--;
@@ -453,14 +539,14 @@ export function applyBlockEffects(
   sim.boostFlashes = sim.boostFlashes.filter((s) => s.frame < 18);
   sim.boostFlashes.forEach((s) => s.frame++);
 
-  blocks.forEach((block) => {
-    const key = blockKey(block);
-    const bcx = ox + block.col * CELL_SIZE + CELL_SIZE / 2;
-    const bcy = oy + block.row * CELL_SIZE + CELL_SIZE / 2;
+  sim.dynBlocks.forEach((dyn) => {
+    const key = dyn.origKey;
+    const bcx = ox + dyn.col * CELL_SIZE + CELL_SIZE / 2;
+    const bcy = oy + dyn.row * CELL_SIZE + CELL_SIZE / 2;
 
-    switch (block.type) {
+    switch (dyn.type) {
       case 'fan': {
-        const [fdx, fdy] = DIRS[block.rotation % 4];
+        const [fdx, fdy] = DIRS[dyn.rotation % 4];
         const dx = ballBody.position.x - bcx;
         const dy = ballBody.position.y - bcy;
         const dist = Math.sqrt(dx * dx + dy * dy);
@@ -485,7 +571,7 @@ export function applyBlockEffects(
         const dy = ballBody.position.y - bcy;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < CELL_SIZE * 0.85 && !sim.gravityEffect) {
-          const [gdx, gdy] = DIRS[block.rotation % 4];
+          const [gdx, gdy] = DIRS[dyn.rotation % 4];
           sim.gravityEffect = {
             dx: gdx * GRAVITY_PAD_STRENGTH,
             dy: gdy * GRAVITY_PAD_STRENGTH,
@@ -498,9 +584,13 @@ export function applyBlockEffects(
         const active = activeTypes.has('piston');
         const hasArm = pistonArms.has(key);
         if (active && !hasArm) {
-          const [pdx, pdy] = DIRS[block.rotation % 4];
-          const armCx = bcx + pdx * CELL_SIZE;
-          const armCy = bcy + pdy * CELL_SIZE;
+          const [pdx, pdy] = DIRS[dyn.rotation % 4];
+
+          // Shove any blocks in front by one cell on this activation.
+          pistonPushChain(sim, dyn, pdx, pdy);
+
+          const armCx = ox + dyn.col * CELL_SIZE + CELL_SIZE / 2 + pdx * CELL_SIZE;
+          const armCy = oy + dyn.row * CELL_SIZE + CELL_SIZE / 2 + pdy * CELL_SIZE;
           const arm = Bodies.rectangle(armCx, armCy, CELL_SIZE * 0.8, CELL_SIZE * 0.8, {
             isStatic: true,
             friction: 0.3,
@@ -518,6 +608,7 @@ export function applyBlockEffects(
               y: pdy * PISTON_FORCE,
             });
           }
+          sim.shake.intensity = Math.max(sim.shake.intensity, 4);
         } else if (!active && hasArm) {
           const arm = pistonArms.get(key)!;
           World.remove(engine.world, arm);
@@ -542,7 +633,7 @@ export function applyBlockEffects(
       case 'whitehole': {
         if (!activeTypes.has('whitehole')) break;
         // Directional jet along rotation arrow
-        const [wdx, wdy] = DIRS[block.rotation % 4];
+        const [wdx, wdy] = DIRS[dyn.rotation % 4];
         const dx = ballBody.position.x - bcx;
         const dy = ballBody.position.y - bcy;
         const dist = Math.sqrt(dx * dx + dy * dy);
@@ -574,15 +665,14 @@ export function applyBlockEffects(
         const dy = ballBody.position.y - bcy;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < PORTAL_RADIUS) {
-          const allPortals = blocks.filter((b) => b.type === 'portal');
-          const myIndex = allPortals.findIndex((p) => p.col === block.col && p.row === block.row);
+          const allPortals = sim.dynBlocks.filter((d) => d.type === 'portal');
+          const myIndex = allPortals.findIndex((p) => p.origKey === dyn.origKey);
           const pairedIndex = myIndex % 2 === 0 ? myIndex + 1 : myIndex - 1;
           const paired = allPortals[pairedIndex];
           if (paired) {
             const targetX = ox + paired.col * CELL_SIZE + CELL_SIZE / 2;
             const targetY = oy + paired.row * CELL_SIZE + CELL_SIZE / 2;
             Body.setPosition(ballBody, { x: targetX, y: targetY });
-            // tiny boost so portal chains keep ball moving
             Body.setVelocity(ballBody, {
               x: ballBody.velocity.x * PORTAL_BOOST,
               y: ballBody.velocity.y * PORTAL_BOOST,

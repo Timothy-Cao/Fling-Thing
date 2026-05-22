@@ -325,15 +325,19 @@ export default function Game() {
       drawDistanceMarkers(ctx, w / zoom, ox, oy, cam.x, cam.y);
 
       const sim = simRef.current;
-      currentBlocks
-        .filter((b) => {
-          if (b.type === 'ball') return false;
-          if (b.type === 'bomb' && sim?.removedBombs.has(`${b.col},${b.row}`)) return false;
-          return true;
-        })
-        .forEach((block) => drawPlacedBlock(ctx, block, ox, oy, cam.x, cam.y, frameCount, activeTypes));
+      // During a run we draw blocks from sim.dynBlocks so pushed-by-piston
+      // positions are visible. In edit / results we draw the static build.
+      const drawableBlocks: PlacedBlock[] = sim
+        ? sim.dynBlocks
+            .filter((d) => !(d.type === 'bomb' && sim.removedBombs.has(d.origKey)))
+            .map((d) => ({ type: d.type, col: d.col, row: d.row, rotation: d.rotation }))
+        : currentBlocks.filter((b) => b.type !== 'ball');
 
-      drawSimulationEffects(ctx, currentBlocks, ox, oy, cam, activeTypes, frameCount, sim);
+      drawableBlocks.forEach((block) =>
+        drawPlacedBlock(ctx, block, ox, oy, cam.x, cam.y, frameCount, activeTypes),
+      );
+
+      drawSimulationEffects(ctx, drawableBlocks, ox, oy, cam, activeTypes, frameCount, sim);
 
       const trail = trailRef.current;
       const v0 = sim?.ballBody.velocity;
@@ -367,9 +371,11 @@ export default function Game() {
       )] as BlockType[];
       drawPoweredHUD(ctx, poweredTypesInUse, activeTypes);
 
-      // Off-screen powered-block chevrons (screen space)
+      // Off-screen powered-block chevrons (screen space). Use the same
+      // dyn-aware block list so pushed pistons/bombs/etc. point at their
+      // *current* positions, not where the build had them.
       drawOffscreenIndicators(
-        ctx, currentBlocks, ox, oy, cam, zoom, w, h,
+        ctx, drawableBlocks, ox, oy, cam, zoom, w, h,
         activeTypes, sim?.removedBombs,
       );
 
@@ -1139,12 +1145,14 @@ export default function Game() {
         </div>
 
         <div className="mt-auto pt-3 border-t border-white/5">
-          <button
-            onClick={() => setShowTemplates(true)}
-            className="w-full px-3 py-2.5 mb-2 rounded-lg text-[11px] font-bold tracking-wide bg-gradient-to-r from-[#e94560]/30 to-[#7c4dff]/30 text-white hover:from-[#e94560]/50 hover:to-[#7c4dff]/50 cursor-pointer border border-white/10 transition-all"
-          >
-            ✨ Load Example
-          </button>
+          {TEMPLATES.length > 0 && (
+            <button
+              onClick={() => setShowTemplates(true)}
+              className="w-full px-3 py-2.5 mb-2 rounded-lg text-[11px] font-bold tracking-wide bg-gradient-to-r from-[#e94560]/30 to-[#7c4dff]/30 text-white hover:from-[#e94560]/50 hover:to-[#7c4dff]/50 cursor-pointer border border-white/10 transition-all"
+            >
+              ✨ Load Example
+            </button>
+          )}
           <div className="flex gap-2 mb-3">
             <button
               onClick={handleExport}
@@ -1394,20 +1402,30 @@ export default function Game() {
                     className="text-gray-400 hover:text-white text-xl leading-none w-6 h-6 flex items-center justify-center"
                   >×</button>
                 </div>
-                <p className="text-xs text-gray-500 mb-4">Loading one will replace your current build (undo with Ctrl+Z).</p>
-                <div className="grid grid-cols-2 gap-3">
-                  {TEMPLATES.map((tpl) => (
-                    <button
-                      key={tpl.id}
-                      onClick={() => handleLoadTemplate(tpl.id)}
-                      className="text-left p-4 rounded-xl bg-gradient-to-br from-[#0f3460] to-[#0d2b52] hover:from-[#1a4682] hover:to-[#143368] border border-white/5 hover:border-[#e94560]/50 cursor-pointer transition-all"
-                    >
-                      <div className="text-base font-bold text-white mb-1">{tpl.name}</div>
-                      <div className="text-[11px] text-gray-400 leading-snug">{tpl.blurb}</div>
-                      <div className="text-[10px] text-gray-600 mt-2">{tpl.blocks.length} blocks</div>
-                    </button>
-                  ))}
-                </div>
+                {TEMPLATES.length === 0 ? (
+                  <div className="py-12 text-center">
+                    <div className="text-4xl mb-3 opacity-40">🛠️</div>
+                    <div className="text-sm text-gray-300 font-semibold mb-1">No examples yet</div>
+                    <div className="text-xs text-gray-500">Better starter builds are coming soon.</div>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-xs text-gray-500 mb-4">Loading one will replace your current build (undo with Ctrl+Z).</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      {TEMPLATES.map((tpl) => (
+                        <button
+                          key={tpl.id}
+                          onClick={() => handleLoadTemplate(tpl.id)}
+                          className="text-left p-4 rounded-xl bg-gradient-to-br from-[#0f3460] to-[#0d2b52] hover:from-[#1a4682] hover:to-[#143368] border border-white/5 hover:border-[#e94560]/50 cursor-pointer transition-all"
+                        >
+                          <div className="text-base font-bold text-white mb-1">{tpl.name}</div>
+                          <div className="text-[11px] text-gray-400 leading-snug">{tpl.blurb}</div>
+                          <div className="text-[10px] text-gray-600 mt-2">{tpl.blocks.length} blocks</div>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -1518,12 +1536,14 @@ export default function Game() {
                   >
                     Build from scratch
                   </button>
-                  <button
-                    onClick={() => { setShowIntro(false); setShowTemplates(true); }}
-                    className="px-12 py-2.5 rounded-xl font-semibold text-sm bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 cursor-pointer transition-all"
-                  >
-                    ✨ Start from an example
-                  </button>
+                  {TEMPLATES.length > 0 && (
+                    <button
+                      onClick={() => { setShowIntro(false); setShowTemplates(true); }}
+                      className="px-12 py-2.5 rounded-xl font-semibold text-sm bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 cursor-pointer transition-all"
+                    >
+                      ✨ Start from an example
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
