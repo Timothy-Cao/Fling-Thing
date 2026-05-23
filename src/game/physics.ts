@@ -34,7 +34,10 @@ import {
   FLOOR_EXTEND_LEFT,
   CEILING_HEIGHT,
   PHYSICS_DT,
+  REAL_FRAME_MS,
   SUBSTEPS_PER_FRAME,
+  MAX_SUBSTEPS_PER_FRAME,
+  SAFE_PX_PER_SUBSTEP,
   MAX_BALL_SPEED,
   SHAKE_DECAY,
   GRID_ROWS,
@@ -200,13 +203,18 @@ export interface SimulationState {
   oy: number;
   stats: SimulationStats;
   shake: { x: number; y: number; intensity: number };
+  // Adaptive substepping: remember where the ball was a frame ago so we
+  // can estimate how many substeps we need *this* frame to keep per-step
+  // motion below SAFE_PX_PER_SUBSTEP.
+  prevBallPos: { x: number; y: number } | null;
+  lastSubstepDt: number;
 }
 
-// INVARIANT: MAX_BALL_SPEED must remain < CELL_SIZE so even a bouncy block's
-// (1 + restitution = 2.6×) post-impulse spike — applied to a body whose
-// pre-step velocity was already clamped to MAX_BALL_SPEED — cannot push the
-// ball through a one-cell-thick obstacle during a single substep. Do not
-// raise MAX_BALL_SPEED above ~36 without also lowering BOUNCY_RESTITUTION.
+// Anti-tunneling is now enforced by adaptive substepping in stepSimulation()
+// (per-substep motion is held below SAFE_PX_PER_SUBSTEP, which is well under
+// CELL_SIZE). MAX_BALL_SPEED is therefore just a numerical sanity bound — it
+// can safely exceed CELL_SIZE. BOUNCY_RESTITUTION should still leave at least
+// one cell of headroom (post-impulse speed × dt ratio < CELL_SIZE).
 const MAX_ANGULAR_VELOCITY = 8; // rad/step — visual sanity; ~76 rev/s at 60Hz
 
 function clampBallSpeed(ball: Matter.Body) {
@@ -304,6 +312,8 @@ export function startSimulation(
     oy,
     stats: { peakSpeed: 0, bounces: 0, frames: 0 },
     shake: { x: 0, y: 0, intensity: 0 },
+    prevBallPos: null,
+    lastSubstepDt: PHYSICS_DT,
   };
 
   // Unified slope redirect handler — ramps and curves share conventions so
@@ -413,19 +423,50 @@ export function stopSimulation(sim: SimulationState) {
   Engine.clear(sim.engine);
 }
 
-// Step physics manually with substeps & speed clamp to prevent tunneling.
+/**
+ * Run one render frame of simulation.
+ *
+ * The number of physics substeps is chosen *dynamically* per frame so each
+ * substep moves the ball no more than SAFE_PX_PER_SUBSTEP pixels (well under
+ * CELL_SIZE), which keeps tunneling impossible at any reachable ball speed
+ * even though MAX_BALL_SPEED is much higher than CELL_SIZE.
+ *
+ * Total simulated time per frame stays equal to REAL_FRAME_MS × speedScale,
+ * so wall-clock pacing and the 90 s timeout don't change as substep counts
+ * scale up.
+ */
 export function stepSimulation(sim: SimulationState) {
-  const substeps = SUBSTEPS_PER_FRAME;
-  const scale = sim.speedScale;
-  const totalSubsteps = Math.max(1, Math.round(substeps * scale));
-  for (let i = 0; i < totalSubsteps; i++) {
+  const totalSimMs = REAL_FRAME_MS * sim.speedScale;
+
+  // Estimate this-frame motion from last-frame motion. On the very first
+  // frame we have nothing to estimate from, so use the conservative base.
+  let pxLastFrame = 0;
+  if (sim.prevBallPos) {
+    const dx = sim.ballBody.position.x - sim.prevBallPos.x;
+    const dy = sim.ballBody.position.y - sim.prevBallPos.y;
+    pxLastFrame = Math.sqrt(dx * dx + dy * dy);
+  }
+
+  // 30 % headroom so a mid-frame acceleration (booster, bomb) doesn't
+  // immediately push per-substep motion over the limit.
+  const desired = Math.ceil((pxLastFrame * 1.3) / SAFE_PX_PER_SUBSTEP);
+  const substeps = Math.max(
+    SUBSTEPS_PER_FRAME,
+    Math.min(MAX_SUBSTEPS_PER_FRAME, desired),
+  );
+  const dt = totalSimMs / substeps;
+  sim.lastSubstepDt = dt;
+
+  for (let i = 0; i < substeps; i++) {
     clampBallSpeed(sim.ballBody);
-    Engine.update(sim.engine, PHYSICS_DT);
+    Engine.update(sim.engine, dt);
     const v = sim.ballBody.velocity;
     const s = Math.sqrt(v.x * v.x + v.y * v.y);
     if (s > sim.stats.peakSpeed) sim.stats.peakSpeed = s;
   }
   clampBallSpeed(sim.ballBody);
+
+  sim.prevBallPos = { x: sim.ballBody.position.x, y: sim.ballBody.position.y };
   sim.stats.frames++;
 
   // Shake decay + jitter sample

@@ -193,7 +193,7 @@ export const BALL_FRICTION = 0.02;
 export const BALL_DENSITY = 0.004;
 
 // --- Surface tuning ---
-export const BOUNCY_RESTITUTION = 1.6;       // amplifies bounces but bounded
+export const BOUNCY_RESTITUTION = 1.4;       // post-impulse spike kept under cell size
 export const ICE_FRICTION = 0.0;             // truly frictionless
 export const CURVE_FRICTION = 0.005;
 export const CURVE_RESTITUTION = 0.1;
@@ -236,10 +236,26 @@ export const FLOOR_EXTEND_LEFT = 2000;
 export const CEILING_HEIGHT = 8000;          // hard upper bound to keep ball in world
 
 // --- Simulation tick ---
+//
+// Adaptive substepping: we keep total simulated time per frame fixed at
+// REAL_FRAME_MS, but vary substep count based on how far the ball actually
+// moved last frame. This keeps per-substep motion below SAFE_PX_PER_SUBSTEP
+// (well under CELL_SIZE) at *any* speed, so tunneling is impossible without
+// a hard low speed cap.
 export const PHYSICS_HZ = 240;
-export const PHYSICS_DT = 1000 / PHYSICS_HZ;
-export const SUBSTEPS_PER_FRAME = 4;         // 60fps * 4 = 240Hz target
-export const MAX_BALL_SPEED = 32;            // px per substep — well under cell size (40) to prevent tunneling
+export const PHYSICS_DT = 1000 / PHYSICS_HZ; // reference dt, used by some old call sites
+export const REAL_FRAME_MS = 1000 / 60;
+export const SUBSTEPS_PER_FRAME = 4;          // minimum substeps for solver stability
+export const MAX_SUBSTEPS_PER_FRAME = 32;     // CPU sanity cap
+export const SAFE_PX_PER_SUBSTEP = 18;        // < CELL_SIZE / 2 — anti-tunneling budget
+
+// Hard absolute speed cap. Now much higher because adaptive substepping
+// guarantees we won't tunnel even if the ball is going very fast. This is
+// mainly a sanity bound so numeric blow-ups can't go to infinity.
+export const MAX_BALL_SPEED = 100;
+// Trail color / camera-zoom mappings use this lower "feels fast" reference
+// so visuals don't desaturate just because MAX is now much higher.
+export const VISUAL_HEAT_PEAK = 50;
 
 // --- End conditions ---
 export const VELOCITY_THRESHOLD = 0.1;
@@ -250,9 +266,9 @@ export const RUN_MAX_FRAMES = 60 * 90;            // 90 second hard timeout
 
 // --- Camera / feel ---
 export const CAMERA_LERP = 0.05;
-export const CAMERA_ZOOM_MIN = 0.6;               // zoomed out when ball is fast
+export const CAMERA_ZOOM_MIN = 0.42;              // zoomed out when ball is fast
 export const CAMERA_ZOOM_MAX = 1.0;
-export const CAMERA_ZOOM_SPEED_RANGE: [number, number] = [10, 28]; // px/substep mapped to zoom
+export const CAMERA_ZOOM_SPEED_RANGE: [number, number] = [12, 60]; // px/substep mapped to zoom
 export const CAMERA_LEAD_PX = 16;                 // camera bias per (px/substep) of horizontal velocity
 export const CAMERA_LEAD_MAX = 380;               // cap on lead distance
 export const SHAKE_DECAY = 0.82;

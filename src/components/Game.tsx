@@ -23,7 +23,7 @@ import {
   CAMERA_ZOOM_SPEED_RANGE,
   CAMERA_LEAD_PX,
   CAMERA_LEAD_MAX,
-  MAX_BALL_SPEED,
+  VISUAL_HEAT_PEAK,
   MILESTONES,
   SPEED_TO_MS,
   COLORS,
@@ -342,7 +342,7 @@ export default function Game() {
       const trail = trailRef.current;
       const v0 = sim?.ballBody.velocity;
       const rawSpeed = v0 ? Math.sqrt(v0.x * v0.x + v0.y * v0.y) : 0;
-      const speedNorm = Math.min(1, rawSpeed / MAX_BALL_SPEED);
+      const speedNorm = Math.min(1, rawSpeed / VISUAL_HEAT_PEAK);
       if (sim) {
         drawBall(
           ctx,
@@ -432,7 +432,7 @@ export default function Game() {
 
             trailRef.current.push({ x: ballBody.position.x, y: ballBody.position.y });
             // Trail length grows with speed: 30 at rest, up to 140 at max.
-            const trailCap = 30 + Math.floor((speedNow / MAX_BALL_SPEED) * 110);
+            const trailCap = 30 + Math.floor(Math.min(1, speedNow / VISUAL_HEAT_PEAK) * 130);
             while (trailRef.current.length > trailCap) trailRef.current.shift();
 
             const { x: ox, y: oy } = runGridOffsetRef.current;
